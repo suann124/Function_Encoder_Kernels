@@ -16,6 +16,7 @@ from function_encoder.utils.training import train_step
 
 device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 torch.manual_seed(42)
+np.random.seed(42)
 
 dataset = PolynomialDataset(n_points=100, n_example_points=10)
 dataloader = DataLoader(dataset, batch_size=50)
@@ -67,6 +68,28 @@ def loss_function(model, batch, ortho_lambda=0.01):
 
     return mse + ortho_lambda * ortho_loss
 
+def pca_interpolate(X_all, f_all, x_grid, num_heads):
+    """Works with your existing imports - no new dependencies"""
+    
+    grid_np = x_grid.cpu().numpy().flatten()
+    
+    # Interpolate all functions to same grid
+    func_matrix = []
+    for i in range(len(f_all)):
+        x_coords = X_all[i].cpu().numpy().flatten()
+        func_vals = f_all[i].cpu().numpy().flatten()
+        func_interp = np.interp(grid_np, x_coords, func_vals)
+        func_matrix.append(func_interp)
+    
+    func_matrix = np.array(func_matrix)
+    
+    # PCA on interpolated functions  
+    pca = PCA(n_components=num_heads)
+    pca.fit(func_matrix)
+    
+    return pca.components_, pca.explained_variance_ratio_
+
+
 losses = []
 sim_matrices = []
 angles_history = []
@@ -85,32 +108,20 @@ with tqdm.tqdm(range(num_epochs), desc=f"basis 1/{MAX_BASIS_SIZE}") as tqdm_bar:
 num_heads = 1
 
 # Compute function-space PCA & metrics of first basis
-pca = PCA(n_components=1)
-pca.fit(flat_f)
-pca_components = pca.components_
+pca_components, pca_explained = pca_interpolate(X_all, f_all, x_grid, num_heads)
 
 with torch.no_grad():
     learned_vals = model.basis_functions(x_grid).cpu().numpy().squeeze()  # [200, 1]
 
-pca_funcs = pca_components.reshape((1, *f_all.shape[1:]))
-interp_pca_vals = np.array([
-    np.interp(X_grid_np,
-              X_all[0].cpu().numpy().flatten(),
-              ef.flatten())
-    for ef in pca_funcs
-])  # [1, 200]
+learned_norm = normalize(learned_vals.reshape(1,-1))     # [1, 200]
+pca_norm = normalize(pca_components.reshape(1,-1))         # [1, 200] 
+sim_matrix = cosine_similarity(learned_norm, pca_norm)
+angles_func = np.degrees(subspace_angles(learned_norm.T, pca_norm.T))
 
-learned_norm = normalize(learned_vals.T.reshape(1, -1))   # [1, 200]
-pca_norm     = normalize(interp_pca_vals.reshape(1, -1))  # [1, 200]
-sim_matrix   = cosine_similarity(learned_norm, pca_norm)
-angles_func  = np.degrees(subspace_angles(learned_norm.T, pca_norm.T))
-
-sim_matrices.append(sim_matrix)
-angles_history.append(angles_func)
 
 print(f"\n-- After {num_heads} basis function(s) --")
-# print("Cosine similarity matrix:")
-# print(sim_matrix)
+print("Cosine similarity matrix:")
+print(sim_matrix)
 for i, ang in enumerate(angles_func, start=1):
     print(f"  Function-space angle {i}: {ang:.4f}°")
 print("—" * 40)
@@ -140,37 +151,26 @@ while num_heads <= MAX_BASIS_SIZE:
             tqdm_bar.set_postfix({"loss": f"{loss:.2e}"})
         losses.append(loss)
 
-    # Train PCA on function values
-    pca = PCA(n_components=num_heads)
-    pca.fit(flat_f)
-    pca_components = pca.components_
-    pca_explained = pca.explained_variance_ratio_
-    
+    # Compute PCA and metrics for the new basis
+    pca_components, pca_explained = pca_interpolate(X_all, f_all, x_grid, num_heads)
+
     with torch.no_grad():
-        learned_vals = model.basis_functions(x_grid).cpu().numpy().squeeze()  # [200, num_heads]
-        
-        pca_funcs = pca_components.reshape((num_heads, *f_all.shape[1:]))
-        interp_pca_vals = np.array([
-        np.interp(X_grid_np,
-                    X_all[0].cpu().numpy().flatten(),
-                    ef.flatten())
-        for ef in pca_funcs
-        ])  # [num_heads, 200]
+        learned_vals = model.basis_functions(x_grid).cpu().numpy().squeeze()
 
-        learned_norm = normalize(learned_vals.T)   # [num_heads, 200]
-        pca_norm     = normalize(interp_pca_vals)  # [num_heads, 200]
-        sim_matrix   = cosine_similarity(learned_norm, pca_norm)
-        angles_func  = np.degrees(subspace_angles(learned_norm.T, pca_norm.T))
+    learned_norm = normalize(learned_vals.T)     # [num_heads, 200]
+    pca_norm = normalize(pca_components)         # [num_heads, 200] 
 
-        sim_matrices.append(sim_matrix)
-        angles_history.append(angles_func)
+    sim_matrix = cosine_similarity(learned_norm, pca_norm)
+    angles_func = np.degrees(subspace_angles(learned_norm.T, pca_norm.T))
 
-        print(f"\n-- After {num_heads} basis function(s) --")
-        # print("Cosine similarity matrix:")
-        # print(sim_matrix)
-        for i, ang in enumerate(angles_func, start=1):
-            print(f"  Function-space angle {i}: {ang:.4f}°")
-        print("—" * 40)
+    print(f"\n-- After {num_heads} basis function(s) --")
+    print("Cosine similarity matrix:")
+    print(sim_matrix)
+
+    print(f"PCA explained variance: {pca_explained}")
+    for i, ang in enumerate(angles_func, start=1):
+        print(f"  Function-space angle {i}: {ang:.4f}°")
+    print("—" * 40)
 
     if loss <= LOSS_THRESHOLD:
         print(f"Reached target loss with {num_heads} basis functions.")
@@ -200,7 +200,7 @@ axs[1].grid()
 basis_labels = [f"B{i+1}" for i in range(num_heads)]
 pca_labels = [f"PC{i+1}\n({var:.1%})" for i, var in enumerate(pca_explained[:num_heads])]
 
-sns.heatmap(sim_matrices, annot=True, fmt=".2f", cmap='viridis',
+sns.heatmap(sim_matrix, annot=True, fmt=".2f", cmap='viridis',
             xticklabels=pca_labels, yticklabels=basis_labels, ax=axs[2])
 
 axs[2].set_xlabel("PCA Components")
