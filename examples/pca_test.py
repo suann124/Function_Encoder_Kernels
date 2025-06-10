@@ -108,13 +108,13 @@ with tqdm.tqdm(range(num_epochs), desc=f"basis 1/{MAX_BASIS_SIZE}") as tqdm_bar:
 num_heads = 1
 
 # Compute function-space PCA & metrics of first basis
-pca_components, pca_explained = pca_interpolate(X_all, f_all, x_grid, num_heads)
+pca_components, pca_explained = pca_interpolate(X_all, f_all, x_grid, MAX_BASIS_SIZE)
 
 with torch.no_grad():
     learned_vals = model.basis_functions(x_grid).cpu().numpy().squeeze()  # [200, 1]
 
 learned_norm = normalize(learned_vals.reshape(1,-1))     # [1, 200]
-pca_norm = normalize(pca_components.reshape(1,-1))         # [1, 200] 
+pca_norm = normalize(pca_components[0].reshape(1,-1))         # [1, 200] 
 sim_matrix = cosine_similarity(learned_norm, pca_norm)
 angles_func = np.degrees(subspace_angles(learned_norm.T, pca_norm.T))
 
@@ -151,14 +151,12 @@ while num_heads <= MAX_BASIS_SIZE:
             tqdm_bar.set_postfix({"loss": f"{loss:.2e}"})
         losses.append(loss)
 
-    # Compute PCA and metrics for the new basis
-    pca_components, pca_explained = pca_interpolate(X_all, f_all, x_grid, num_heads)
-
+    # PCA comparisons
     with torch.no_grad():
         learned_vals = model.basis_functions(x_grid).cpu().numpy().squeeze()
 
     learned_norm = normalize(learned_vals.T)     # [num_heads, 200]
-    pca_norm = normalize(pca_components)         # [num_heads, 200] 
+    pca_norm = normalize(pca_components[:num_heads,:])         # [num_heads, 200] 
 
     sim_matrix = cosine_similarity(learned_norm, pca_norm)
     angles_func = np.degrees(subspace_angles(learned_norm.T, pca_norm.T))
@@ -167,7 +165,7 @@ while num_heads <= MAX_BASIS_SIZE:
     print("Cosine similarity matrix:")
     print(sim_matrix)
 
-    print(f"PCA explained variance: {pca_explained}")
+    print(f"PCA explained variance: {pca_explained[:num_heads]}")
     for i, ang in enumerate(angles_func, start=1):
         print(f"  Function-space angle {i}: {ang:.4f}°")
     print("—" * 40)
