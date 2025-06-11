@@ -68,9 +68,7 @@ def loss_function(model, batch, ortho_lambda=0.01):
 
     return mse + ortho_lambda * ortho_loss
 
-def pca_interpolate(X_all, f_all, x_grid, num_heads):
-    """Works with your existing imports - no new dependencies"""
-    
+def pca_interpolate(X_all, f_all, x_grid, num_heads):    
     grid_np = x_grid.cpu().numpy().flatten()
     
     # Interpolate all functions to same grid
@@ -118,6 +116,7 @@ pca_norm = normalize(pca_components[0].reshape(1,-1))         # [1, 200]
 sim_matrix = cosine_similarity(learned_norm, pca_norm)
 angles_func = np.degrees(subspace_angles(learned_norm.T, pca_norm.T))
 
+angles_history.append(angles_func)
 
 print(f"\n-- After {num_heads} basis function(s) --")
 print("Cosine similarity matrix:")
@@ -160,6 +159,7 @@ while num_heads <= MAX_BASIS_SIZE:
 
     sim_matrix = cosine_similarity(learned_norm, pca_norm)
     angles_func = np.degrees(subspace_angles(learned_norm.T, pca_norm.T))
+    angles_history.append(angles_func)
 
     print(f"\n-- After {num_heads} basis function(s) --")
     print("Cosine similarity matrix:")
@@ -177,7 +177,6 @@ while num_heads <= MAX_BASIS_SIZE:
     if num_heads == MAX_BASIS_SIZE:
         print("Reached maximum basis size without reaching loss threshold.")
         break
-
 
 # ====================================================================================
 # Plotting
@@ -209,22 +208,21 @@ plt.tight_layout()
 plt.show()
 
 # # ===================================Principal Angles=================================
-# # Coefficient subspace comparison
-# coeff_ls = []
-# with torch.no_grad():
-#      for i in range(X_all.shape[0]):
-#         Xi = X_all[i].unsqueeze(0)  # shape: [1, 100, 1]
-#         yi = f_all[i].unsqueeze(0)  # shape: [1, 100, 1]
-#         coeffs, _ = model.compute_coefficients(Xi, yi)
-#         coeff_ls.append(coeffs.cpu())
-# coeffs_np = torch.cat(coeff_ls, dim=0).numpy()
-# learned_subspace = normalize(coeffs_np.T)
-# pca_subspace = normalize(pca.transform(flat_f)[:, :num_heads].T)
-# angles_deg = np.degrees(subspace_angles(learned_subspace.T, pca_subspace.T))
+# Pad each angle list to the max number of basis functions
+max_len = max(len(a) for a in angles_history)
+angles_padded = [np.pad(a, (0, max_len - len(a)), constant_values=np.nan) for a in angles_history]
+angles_array = np.vstack(angles_padded)  # shape [num_heads, max_len]
 
-# print("\n=== Principal Angles ===")
-# for i, angle in enumerate(angles_deg):
-#     print(f"Principal angle {i+1}: {angle:.4f}°")
+# Plot each principal angle over basis size
+for i in range(angles_array.shape[1]):
+    plt.plot(range(1, angles_array.shape[0] + 1), angles_array[:, i],'o', label=f"Angle {i+1}")
+
+plt.xlabel("Basis Size")
+plt.ylabel("Principal Angle (°)")
+plt.title("Principal Angles vs Basis Size")
+plt.legend()
+plt.grid()
+plt.show()
 
 # ===============================plotting basis functions==============================
 def plot_learned_basis():
