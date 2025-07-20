@@ -1,0 +1,436 @@
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+import numpy as np
+import matplotlib.pyplot as plt
+from typing import List, Tuple
+import tqdm
+from copy import deepcopy
+
+from my_datasets.polynomial import PolynomialDataset
+
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from function_encoder.model.mlp import MLP
+from function_encoder.function_encoder import BasisFunctions, FunctionEncoder
+from function_encoder.utils.training import train_step
+
+
+class TrainPruneAnalyzer:
+    def __init__(self, device='cuda' if torch.cuda.is_available() else 'cpu'):
+        self.device = device
+        
+    def train_full_model(self, 
+                        num_basis: int, 
+                        dataset: PolynomialDataset,
+                        num_epochs: int = 2000,
+                        batch_size: int = 50) -> FunctionEncoder:
+        """Train a model with all basis functions from scratch."""
+        
+        print(f"Training full model with {num_basis} basis functions...")
+        
+        # Create model with all basis functions
+        def basis_function_factory():
+            return MLP(layer_sizes=[1, 32, 1])
+        
+        basis_functions = BasisFunctions(*[basis_function_factory() for _ in range(num_basis)])
+        model = FunctionEncoder(basis_functions).to(self.device)
+        
+        # Setup training
+        dataloader = DataLoader(dataset, batch_size=batch_size)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        losses = []
+        
+        # Training loop
+        with tqdm.tqdm(range(num_epochs), desc="Training full model") as pbar:
+            for epoch in pbar:
+                batch = next(iter(dataloader))
+                loss = train_step(model, optimizer, batch, self.loss_function)
+                losses.append(loss)
+                pbar.set_postfix({"loss": f"{loss:.2e}"})
+        
+        return model, losses
+    
+    def analyze_basis_importance(self, 
+                               model: FunctionEncoder, 
+                               dataset: PolynomialDataset,
+                               num_samples: int = 1000) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Analyze basis importance using PCA on coefficients."""
+        
+        print("Analyzing basis importance with PCA...")
+        
+        model.eval()
+        dataloader = DataLoader(dataset, batch_size=num_samples)
+        batch = next(iter(dataloader))
+        
+        with torch.no_grad():
+            _, _, example_X, example_y = batch
+            example_X = example_X.to(self.device)
+            example_y = example_y.to(self.device)
+            
+            # Compute coefficients for all samples
+            coefficients, G = model.compute_coefficients(example_X, example_y)
+            coefficients_np = coefficients.cpu().numpy()
+            
+            # Center the coefficients
+            coefficients_centered = coefficients_np - np.mean(coefficients_np, axis=0)
+            
+            # Compute covariance matrix
+            cov_matrix = np.cov(coefficients_centered.T)
+            
+            # Eigendecomposition
+            eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
+            
+            # Sort in descending order
+            idx = eigenvalues.argsort()[::-1]
+            eigenvalues = eigenvalues[idx]
+            eigenvectors = eigenvectors[:, idx]
+            
+            # Compute explained variance ratio
+            explained_variance_ratio = eigenvalues / eigenvalues.sum()
+            
+            # Project coefficients onto principal components
+            pc_scores = coefficients_centered @ eigenvectors
+            
+            return eigenvalues, eigenvectors, explained_variance_ratio
+    
+    def identify_redundant_basis(self, 
+                               eigenvalues: np.ndarray,
+                               eigenvectors: np.ndarray,
+                               explained_variance_ratio: np.ndarray,
+                               variance_threshold: float = 0.99) -> List[int]:
+        """Identify which basis functions to keep based on PCA analysis."""
+        
+        # Finding number of basis needed: Cumulative variance threshold
+        cumsum_var = np.cumsum(explained_variance_ratio)
+        n_components = np.argmax(cumsum_var >= variance_threshold) + 1
+        
+        print(f"Need {n_components} components to explain {variance_threshold*100}% variance")
+        
+        # Find which original basis contribute most to top PCs
+        # Look at the loadings (eigenvectors)
+        n_basis = eigenvectors.shape[0]
+        basis_importance = np.zeros(n_basis)
+        
+        # Weight each basis by its contribution to important PCs
+        for i in range(n_components):
+            basis_importance += np.abs(eigenvectors[:, i]) * eigenvalues[i]
+        
+        # Sort basis by importance
+        important_basis_indices = np.argsort(basis_importance)[::-1][:n_components] #sort, reverse, slice to k basis
+        
+        return sorted(important_basis_indices.tolist())
+    
+    def prune_model(self, 
+                   model: FunctionEncoder, 
+                   keep_indices: List[int]) -> FunctionEncoder:
+        """Create a pruned model keeping only specified basis functions."""
+        
+        print(f"Pruning model to keep {len(keep_indices)} basis functions...")
+        
+        # Create new model with fewer basis functions
+        def basis_function_factory():
+            return MLP(layer_sizes=[1, 32, 1])
+        
+        pruned_basis_functions = BasisFunctions(*[basis_function_factory() for _ in range(len(keep_indices))])
+        pruned_model = FunctionEncoder(pruned_basis_functions).to(self.device)
+        
+        # Copy weights from original model for kept basis
+        with torch.no_grad():
+            for new_idx, old_idx in enumerate(keep_indices):
+                old_basis = model.basis_functions.basis_functions[old_idx]
+                new_basis = pruned_model.basis_functions.basis_functions[new_idx]
+                
+                # Copy all parameters
+                old_state = old_basis.state_dict()
+                new_basis.load_state_dict(old_state)
+        
+        return pruned_model
+    
+    def fine_tune_pruned_model(self,
+                             model: FunctionEncoder,
+                             dataset: PolynomialDataset,
+                             num_epochs: int = 500,
+                             batch_size: int = 50) -> Tuple[FunctionEncoder, List[float]]:
+        """Fine-tune the pruned model."""
+        
+        print("Fine-tuning pruned model...")
+        model_to_tune = deepcopy(model)
+
+        dataloader = DataLoader(dataset, batch_size=batch_size)
+        optimizer = torch.optim.Adam(model_to_tune.parameters(), lr=5e-4)
+        losses = []
+        
+        with tqdm.tqdm(range(num_epochs), desc="Fine-tuning") as pbar:
+            for epoch in pbar:
+                batch = next(iter(dataloader))
+                loss = train_step(model_to_tune, optimizer, batch, self.loss_function)
+                losses.append(loss)
+                pbar.set_postfix({"loss": f"{loss:.2e}"})
+        
+        return model_to_tune, losses
+    
+    def compare_models(self,
+                      original_model: FunctionEncoder,
+                      pruned_model: FunctionEncoder,
+                      pruned_model_refined: FunctionEncoder,
+                      dataset: PolynomialDataset,
+                      num_test_samples: int = 100):
+        """Compare performance of original vs pruned model."""
+        
+        print("\nComparing model performance...")
+        
+        test_loader = DataLoader(dataset, batch_size=num_test_samples)
+        batch = next(iter(test_loader))
+        
+        X, y, example_X, example_y = batch
+        X = X.to(self.device)
+        y = y.to(self.device)
+        example_X = example_X.to(self.device)
+        example_y = example_y.to(self.device)
+        
+        original_model.eval()
+        pruned_model.eval()
+        pruned_model_refined.eval()
+        
+        with torch.no_grad():
+            # Original model predictions
+            coeffs_orig, _ = original_model.compute_coefficients(example_X, example_y)
+            y_pred_orig = original_model(X, coeffs_orig)
+            mse_orig = torch.nn.functional.mse_loss(y_pred_orig, y).item()
+            
+            # Pruned model predictions
+            coeffs_pruned, _ = pruned_model.compute_coefficients(example_X, example_y)
+            y_pred_pruned = pruned_model(X, coeffs_pruned)
+            mse_pruned = torch.nn.functional.mse_loss(y_pred_pruned, y).item()
+
+            # Pruned Refined model predictions
+            coeffs_pruned_refined, _ = pruned_model_refined.compute_coefficients(example_X, example_y)
+            y_pred_pruned_refined = pruned_model_refined(X, coeffs_pruned_refined)
+            mse_pruned_refined = torch.nn.functional.mse_loss(y_pred_pruned_refined, y).item()
+        
+        print(f"Original model MSE: {mse_orig:.2e}")
+        print(f"Pruned model MSE: {mse_pruned:.2e}")
+        print(f"Pruned Refined model MSE: {mse_pruned_refined:.2e}")
+        print(f"Performance ratio (refned): {mse_pruned_refined/mse_orig:.3f}")
+        print(f"Compression ratio (refined): {len(pruned_model_refined.basis_functions.basis_functions)}/{len(original_model.basis_functions.basis_functions)}")
+        
+        return {
+            'mse_original': mse_orig,
+            'mse_pruned': mse_pruned,
+            'mse_pruned_refined': mse_pruned_refined,
+            'y_pred_original': y_pred_orig,
+            'y_pred_pruned': y_pred_pruned,
+            'y_pred_pruned_refined': y_pred_pruned_refined,
+            'coeffs_original': coeffs_orig,
+            'coeffs_pruned': coeffs_pruned,
+            'coeffs_pruned_refined': coeffs_pruned_refined
+        }
+    
+    def loss_function(self, model, batch):
+        """Loss function for training."""
+        X, y, example_X, example_y = batch
+        X = X.to(self.device)
+        y = y.to(self.device)
+        example_X = example_X.to(self.device)
+        example_y = example_y.to(self.device)
+        
+        coefficients, G = model.compute_coefficients(example_X, example_y)
+        y_pred = model(X, coefficients)
+        
+        pred_loss = torch.nn.functional.mse_loss(y_pred, y)
+        return pred_loss
+    
+    def visualize_results(self, 
+                         original_model: FunctionEncoder,
+                         pruned_model: FunctionEncoder,
+                         pruned_model_refined: FunctionEncoder,
+                         eigenvalues: np.ndarray,
+                         explained_variance_ratio: np.ndarray,
+                         keep_indices: List[int],
+                         comparison_results: dict,
+                         dataset: PolynomialDataset):
+        """Visualize the pruning results."""
+        
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        
+        # 1. Eigenvalue spectrum
+        ax = axes[0, 0]
+        ax.semilogy(eigenvalues, 'b.-', label='Eigenvalues')
+        ax.axvline(x=len(keep_indices)-1, color='r', linestyle='--', label=f'Cutoff (n={len(keep_indices)})')
+        ax.set_xlabel('Component')
+        ax.set_ylabel('Eigenvalue')
+        ax.set_title('PCA Eigenvalue Spectrum')
+        ax.legend()
+        ax.grid(True)
+        
+        # 2. Cumulative explained variance
+        ax = axes[0, 1]
+        cumsum_var = np.cumsum(explained_variance_ratio)
+        ax.plot(cumsum_var, 'g.-')
+        ax.axhline(y=0.99, color='r', linestyle='--', label='99% threshold')
+        ax.axvline(x=len(keep_indices)-1, color='r', linestyle='--')
+        ax.set_xlabel('Number of Components')
+        ax.set_ylabel('Cumulative Explained Variance')
+        ax.set_title('Cumulative Variance Explained')
+        ax.legend()
+        ax.grid(True)
+        
+        # 3. Basis function importance
+        ax = axes[0, 2]
+        n_basis = len(original_model.basis_functions.basis_functions)
+        basis_indices = np.arange(n_basis)
+        colors = ['red' if i in keep_indices else 'blue' for i in basis_indices]
+        ax.bar(basis_indices, np.ones(n_basis), color=colors)
+        ax.set_xlabel('Basis Function Index')
+        ax.set_ylabel('Selected')
+        ax.set_title('Selected Basis Functions (Red = Kept)')
+        
+        # 4. Function approximation comparison
+        ax = axes[1, 0]
+        test_sample = next(iter(DataLoader(dataset, batch_size=1)))
+        X, y, example_X, example_y = test_sample
+
+        idx = torch.argsort(X[0,:,0])
+        X_sorted = X[0,:,0][idx].cpu().numpy()
+        y_sorted = y[0,:,0][idx].cpu().numpy()
+
+        original_model.eval()
+        pruned_model.eval()
+        pruned_model_refined.eval()
+
+        # Recompute predictions for the local test sample
+        with torch.no_grad():
+            coeffs_orig, _ = original_model.compute_coefficients(example_X.to(self.device), example_y.to(self.device))
+            y_pred_orig = original_model(X.to(self.device), coeffs_orig)[0,:,0][idx].cpu().numpy()
+
+            coeffs_pruned, _ = pruned_model.compute_coefficients(example_X.to(self.device), example_y.to(self.device))
+            y_pred_pruned = pruned_model(X.to(self.device), coeffs_pruned)[0,:,0][idx].cpu().numpy()
+
+            coeffs_pruned_refined, _ = pruned_model_refined.compute_coefficients(example_X.to(self.device), example_y.to(self.device))
+            y_pred_pruned_refined = pruned_model_refined(X.to(self.device), coeffs_pruned_refined)[0,:,0][idx].cpu().numpy()
+
+        ax.plot(X_sorted, y_sorted, 'k-', label='True', linewidth=1)
+        ax.plot(X_sorted, y_pred_orig, 'b--', label='Original', alpha=0.8)
+        ax.plot(X_sorted, y_pred_pruned, 'g--', label='Pruned', alpha=0.8)
+        ax.plot(X_sorted, y_pred_pruned_refined, 'r:', label='Pruned & Refined', linewidth=2)
+        ax.scatter(example_X[0].cpu(), example_y[0].cpu(), c='red', s=20, zorder=5, alpha=0.5, label='Example Points')
+        ax.set_xlabel('x')
+        ax.set_ylabel('y')
+        ax.set_title('Function Approximation Comparison')
+        ax.legend()
+        
+        # 5. Coefficient comparison
+        ax = axes[1, 1]
+        coeffs_orig = comparison_results['coeffs_original'][0].cpu().numpy()
+        coeffs_pruned = comparison_results['coeffs_pruned'][0].cpu().numpy()
+        coeffs_pruned_refined = comparison_results['coeffs_pruned_refined'][0].cpu().numpy()
+        
+        x_pos = np.arange(len(coeffs_orig))
+        ax.bar(x_pos - 0.2, coeffs_orig, 0.4, label='Original', alpha=0.7)
+        
+        x_pos_pruned = np.arange(len(coeffs_pruned))
+        ax.bar(x_pos_pruned + 0.2, coeffs_pruned, 0.4, label='Pruned', alpha=0.7)
+
+        x_pos_pruned = np.arange(len(coeffs_pruned_refined))
+        ax.bar(x_pos_pruned + 0.4, coeffs_pruned_refined, 0.4, label='Pruned & Refined', alpha=0.7)
+        
+        ax.set_xlabel('Basis Index')
+        ax.set_ylabel('Coefficient Value')
+        ax.set_title('Coefficient Comparison')
+        ax.legend()
+        
+        # 6. Performance summary
+        ax = axes[1, 2]
+        ax.axis('off')
+        summary_text = f"""Performance Summary:
+        
+Original Model:
+- Basis functions: {len(original_model.basis_functions.basis_functions)}
+- MSE: {comparison_results['mse_original']:.2e}
+
+Pruned Model:
+- Basis functions: {len(pruned_model.basis_functions.basis_functions)}
+- MSE: {comparison_results['mse_pruned']:.2e}
+
+Pruned & Refined Model:
+- Basis functions: {len(pruned_model_refined.basis_functions.basis_functions)}
+- MSE: {comparison_results['mse_pruned_refined']:.2e}
+
+Compression: {len(pruned_model_refined.basis_functions.basis_functions)}/{len(original_model.basis_functions.basis_functions)} = {len(pruned_model.basis_functions.basis_functions)/len(original_model.basis_functions.basis_functions):.1%}
+Performance ratio: {comparison_results['mse_pruned_refined']/comparison_results['mse_original']:.3f}"""
+        
+        ax.text(0.1, 0.5, summary_text, transform=ax.transAxes, 
+                fontsize=12, verticalalignment='center',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        plt.tight_layout()
+        plt.show()
+
+
+# ============================== Main ===============================
+if __name__ == "__main__":
+    torch.manual_seed(42)
+    np.random.seed(42)
+    
+    # Initialize
+    analyzer = TrainPruneAnalyzer()
+    
+    # Create dataset
+    dataset = PolynomialDataset(n_points=100, n_example_points=100, degree=3)
+    
+    # Step 1: Train full model
+    num_basis = 20  # Start with many basis functions
+    full_model, train_losses = analyzer.train_full_model(num_basis, dataset, num_epochs=2000)
+    
+    # Step 2: Analyze basis importance
+    eigenvalues, eigenvectors, explained_var = analyzer.analyze_basis_importance(full_model, dataset)
+    
+    # Step 3: Identify which basis to keep
+    keep_indices = analyzer.identify_redundant_basis(eigenvalues, eigenvectors, explained_var, variance_threshold=0.99)
+    print(f"\nKeeping basis functions at indices: {keep_indices}")
+    
+    # Step 4: Create pruned model
+    pruned_model = analyzer.prune_model(full_model, keep_indices)
+    
+    # Step 5: Fine-tune pruned model
+    pruned_model_refined, finetune_losses = analyzer.fine_tune_pruned_model(pruned_model, dataset, num_epochs=500)
+    
+    # Step 6: Compare performance
+    comparison_results = analyzer.compare_models(full_model, pruned_model, pruned_model_refined, dataset)
+    
+    # Step 7: Visualize results
+    analyzer.visualize_results(full_model, pruned_model, pruned_model_refined, eigenvalues, explained_var, 
+                              keep_indices, comparison_results, dataset)
+    
+    # Additional analysis: Show individual basis functions
+    fig, axes = plt.subplots(2, max(num_basis//2, len(keep_indices)), figsize=(15, 6))
+    X_plot = torch.linspace(-1, 1, 100).unsqueeze(0).unsqueeze(2).to(analyzer.device)
+    
+    # Original basis functions
+    for i in range(num_basis):
+        ax = axes[0, i % (num_basis//2)]
+        with torch.no_grad():
+            basis_output = full_model.basis_functions.basis_functions[i](X_plot)
+        color = 'red' if i in keep_indices else 'blue'
+        ax.plot(X_plot[0, :, 0].cpu(), basis_output[0, :, 0].cpu(), color=color)
+        ax.set_title(f"Original φ_{i+1}")
+        ax.set_ylim(-2, 2)
+    
+    # Pruned basis functions
+    for i, basis_fn in enumerate(pruned_model.basis_functions.basis_functions):
+        ax = axes[1, i]
+        with torch.no_grad():
+            basis_output = basis_fn(X_plot)
+        ax.plot(X_plot[0, :, 0].cpu(), basis_output[0, :, 0].cpu(), 'green')
+        ax.set_title(f"Pruned φ_{i+1} (was {keep_indices[i]+1})")
+        ax.set_ylim(-2, 2)
+    
+    # Clear unused subplots
+    for i in range(len(pruned_model.basis_functions.basis_functions), axes.shape[1]):
+        axes[1, i].axis('off')
+    
+    plt.suptitle('Basis Functions: Original (red=kept, blue=pruned) vs Pruned (green)')
+    plt.tight_layout()
+    plt.show()
