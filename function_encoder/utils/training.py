@@ -1,0 +1,45 @@
+from typing import Callable, Any, Iterator, Union
+import torch
+from function_encoder.function_encoder import BasisFunctions
+import tqdm
+
+def fit(model, ds, loss_function, epochs):
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+
+    for epoch in range(epochs):
+        model.train()
+        total_loss = 0.0
+
+        for batch in ds:
+            optimizer.zero_grad()
+            loss = loss_function(model, batch)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+
+        print(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss:.4f}")
+
+    return model
+
+def train_step(model, optimizer, batch, loss_function):
+    """Performs a single training step, clips grad norm, and returns the loss value."""
+    model.train()
+    optimizer.zero_grad()
+    loss = loss_function(model, batch)
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+    optimizer.step()
+    return loss.item()
+
+
+def test_eval(model, dataloader, loss_function):
+    """Evaluates the model on the dataset and returns the average loss."""
+    model.eval()
+    total_loss = 0.0
+    count = 0
+    with torch.no_grad():
+        for batch in dataloader:
+            loss = loss_function(model, batch)
+            total_loss += loss.item()
+            count += 1
+    return total_loss / count if count > 0 else float("nan")
