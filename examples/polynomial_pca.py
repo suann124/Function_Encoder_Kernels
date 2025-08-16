@@ -25,7 +25,7 @@ else:
 torch.manual_seed(42)
 
 # Load dataset
-dataset = PolynomialDataset(n_points=100, n_example_points=100, degree=3)
+dataset = Dataset(n_points=100, n_example_points=100, degree=3)
 dataloader = DataLoader(dataset, batch_size=50)
 dataloader_iter = iter(dataloader)
 
