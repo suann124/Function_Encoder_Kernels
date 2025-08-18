@@ -17,7 +17,7 @@ from function_encoder.coefficients import least_squares, lasso
 import tqdm
 
 if torch.cuda.is_available():
-    device = "cuda"
+    device = "cuda:3"
 elif torch.backends.mps.is_available():
     device = "mps"
 else:
