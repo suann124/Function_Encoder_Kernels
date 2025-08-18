@@ -96,7 +96,7 @@ with tqdm.tqdm(range(num_epochs), desc=f"basis 1/{num_basis}") as tqdm_bar:
     for epoch in tqdm_bar:
         batch = next(dataloader_iter)
         loss = train_step(model, optimizer, batch, loss_function)
-        losses.append(loss)
+        losses.append(loss[-1])  # Only the final loss
         tqdm_bar.set_postfix({"loss": f"{loss:.2e}"})
 
 

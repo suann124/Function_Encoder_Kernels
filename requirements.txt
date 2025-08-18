@@ -2,3 +2,6 @@ torch
 matplotlib
 tqdm
 scikit-fda
+jupyter
+ipykernel
+notebook

@@ -7,6 +7,15 @@
 
 	"runArgs": ["--gpus", "all"],
 
+	"customizations": {
+		"vscode": {
+			"extensions": [
+			"ms-toolsai.jupyter"      // Jupyter extension
+			// "ms-python.python"         // Python extension if you also need it
+			]
+		}
+	},
+
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	// "features": {},
 

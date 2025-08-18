@@ -16,7 +16,7 @@ from function_encoder.coefficients import least_squares, lasso
 import tqdm
 
 if torch.cuda.is_available():
-    device = "cuda"
+    device = "cuda:5"
 elif torch.backends.mps.is_available():
     device = "mps"
 else:
@@ -161,93 +161,80 @@ while num_heads <= MAX_BASIS_SIZE:
 
 
 
+# Plot a grid of evaluations
+
+import matplotlib.pyplot as plt
 
 
+model.eval()
+with torch.no_grad():
+    # Generate a single batch of functions for plotting
+    dataloader = DataLoader(dataset, batch_size=9)
+    dataloader_iter = iter(dataloader)
+    batch = next(dataloader_iter)
 
+    mu, y0, dt, y1, y0_example, dt_example, y1_example = batch
+    mu = mu.to(device)
+    y0 = y0.to(device)
+    dt = dt.to(device)
+    y1 = y1.to(device)
+    y0_example = y0_example.to(device)
+    dt_example = dt_example.to(device)
+    y1_example = y1_example.to(device)
 
+    # Precompute the coefficients for the batch
+    coefficients, G = model.compute_coefficients((y0_example, dt_example), y1_example)
 
+    fig, ax = plt.subplots(3, 3, figsize=(10, 10))
 
+    for i in range(3):
+        for j in range(3):
 
+            # Plot a single trajectory
+            _mu = mu[i * 3 + j]
+            _y0 = torch.empty(1, 2, device=device).uniform_(
+                *dataloader.dataset.y0_range
+            )
+            # We use the coefficients that we computed before
+            _c = coefficients[i * 3 + j].unsqueeze(0)
+            s = 0.1  # Time step for simulation
+            n = int(10 / s)
+            _dt = torch.tensor([s], device=device)
 
+            # Integrate the true trajectory
+            x = _y0.clone()
+            y = [x]
+            for k in range(n):
+                x = rk4_step(van_der_pol, x, _dt, mu=_mu) + x
+                y.append(x)
+            y = torch.cat(y, dim=0)
+            y = y.detach().cpu().numpy()
 
+            # Integrate the predicted trajectory
+            x = _y0.clone()
+            x = x.unsqueeze(1)
+            _dt = _dt.unsqueeze(0)
+            pred = [x]
+            for k in range(n):
+                x = model((x, _dt), coefficients=_c) + x
+                pred.append(x)
+            pred = torch.cat(pred, dim=1)
+            pred = pred.detach().cpu().numpy()
 
+            ax[i, j].set_xlim(-5, 5)
+            ax[i, j].set_ylim(-5, 5)
+            (_t,) = ax[i, j].plot(y[:, 0], y[:, 1], label="True")
+            (_p,) = ax[i, j].plot(pred[0, :, 0], pred[0, :, 1], label="Predicted")
 
+    fig.legend(
+        handles=[_t, _p],
+        loc="outside upper center",
+        bbox_to_anchor=(0.5, 0.95),
+        ncol=2,
+        frameon=False,
+    )
 
-
-# # Plot a grid of evaluations
-
-# import matplotlib.pyplot as plt
-
-
-# model.eval()
-# with torch.no_grad():
-#     # Generate a single batch of functions for plotting
-#     dataloader = DataLoader(dataset, batch_size=9)
-#     dataloader_iter = iter(dataloader)
-#     batch = next(dataloader_iter)
-
-#     mu, y0, dt, y1, y0_example, dt_example, y1_example = batch
-#     mu = mu.to(device)
-#     y0 = y0.to(device)
-#     dt = dt.to(device)
-#     y1 = y1.to(device)
-#     y0_example = y0_example.to(device)
-#     dt_example = dt_example.to(device)
-#     y1_example = y1_example.to(device)
-
-#     # Precompute the coefficients for the batch
-#     coefficients, G = model.compute_coefficients((y0_example, dt_example), y1_example)
-
-#     fig, ax = plt.subplots(3, 3, figsize=(10, 10))
-
-#     for i in range(3):
-#         for j in range(3):
-
-#             # Plot a single trajectory
-#             _mu = mu[i * 3 + j]
-#             _y0 = torch.empty(1, 2, device=device).uniform_(
-#                 *dataloader.dataset.y0_range
-#             )
-#             # We use the coefficients that we computed before
-#             _c = coefficients[i * 3 + j].unsqueeze(0)
-#             s = 0.1  # Time step for simulation
-#             n = int(10 / s)
-#             _dt = torch.tensor([s], device=device)
-
-#             # Integrate the true trajectory
-#             x = _y0.clone()
-#             y = [x]
-#             for k in range(n):
-#                 x = rk4_step(van_der_pol, x, _dt, mu=_mu) + x
-#                 y.append(x)
-#             y = torch.cat(y, dim=0)
-#             y = y.detach().cpu().numpy()
-
-#             # Integrate the predicted trajectory
-#             x = _y0.clone()
-#             x = x.unsqueeze(1)
-#             _dt = _dt.unsqueeze(0)
-#             pred = [x]
-#             for k in range(n):
-#                 x = model((x, _dt), coefficients=_c) + x
-#                 pred.append(x)
-#             pred = torch.cat(pred, dim=1)
-#             pred = pred.detach().cpu().numpy()
-
-#             ax[i, j].set_xlim(-5, 5)
-#             ax[i, j].set_ylim(-5, 5)
-#             (_t,) = ax[i, j].plot(y[:, 0], y[:, 1], label="True")
-#             (_p,) = ax[i, j].plot(pred[0, :, 0], pred[0, :, 1], label="Predicted")
-
-#     fig.legend(
-#         handles=[_t, _p],
-#         loc="outside upper center",
-#         bbox_to_anchor=(0.5, 0.95),
-#         ncol=2,
-#         frameon=False,
-#     )
-
-#     plt.show()
+    plt.show()
 
     # save the model
 
