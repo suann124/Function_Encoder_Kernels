@@ -3,8 +3,9 @@ Progressive Basis Functions Training for Van der Pol Oscillator
 """
 
 import torch
+import numpy as np
 from torch.utils.data import DataLoader
-from my_datasets.van_der_pol import VanDerPolDataset, van_der_pol
+from my_datasets.cwh import CWHDataset, cwh, cwh_torch, CWHParams
 
 import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -18,23 +19,28 @@ from function_encoder.utils.training import train_step
 import tqdm
 
 if torch.cuda.is_available():
-    device = "cuda"
+    device = "cuda:4"
+    gpu_id = torch.cuda.current_device()
+    gpu_name = torch.cuda.get_device_name(gpu_id)
+    print(f"Using GPU {gpu_id}: {gpu_name}")
 elif torch.backends.mps.is_available():
     device = "mps"
+    print("Using Apple Metal (MPS) backend")
 else:
     device = "cpu"
+    print("Using CPU")
 
 torch.manual_seed(42)
 
 # Load dataset
-dataset = VanDerPolDataset(n_points=1000, n_example_points=100, dt_range=(0.1, 0.1))
+dataset = CWHDataset(n_points=1000, n_example_points=100)
 dataloader = DataLoader(dataset, batch_size=50)
 dataloader_iter = iter(dataloader)
 
 # Create model
 def basis_function_factory():
     return NeuralODE(
-        ode_func=ODEFunc(model=MLP(layer_sizes=[3, 64, 64, 2])),
+        ode_func=ODEFunc(model=MLP(layer_sizes=[7, 64, 64, 6])),  # 7 = 6 state + 1 time
         integrator=rk4_step,
     )
 
@@ -50,7 +56,7 @@ dataloader_coeffs = DataLoader(dataset, batch_size=100)
 dataloader_coeffs_iter = iter(dataloader_coeffs)
 
 def compute_explained_variance(model):
-    _, _, _, _, y0_example, dt_example, y1_example = next(dataloader_coeffs_iter)
+    orbital_rate, _, _, _, y0_example, dt_example, y1_example = next(dataloader_coeffs_iter)
     y0_example = y0_example.to(device)
     dt_example = dt_example.to(device)
     y1_example = y1_example.to(device)
@@ -74,7 +80,7 @@ def compute_explained_variance(model):
     return explained_variance_ratio, eigenvalues, gram_eigenvalues
 
 def loss_function(model, batch):
-    _, y0, dt, y1, y0_example, dt_example, y1_example = batch
+    orbital_rate, y0, dt, y1, y0_example, dt_example, y1_example = batch
     y0 = y0.to(device)
     dt = dt.to(device)
     y1 = y1.to(device)
@@ -88,6 +94,50 @@ def loss_function(model, batch):
     pred_loss = torch.nn.functional.mse_loss(y_pred, y1)
 
     return pred_loss
+
+@torch.no_grad()
+def prediction_subset(
+    model,
+    y0,                  # (1,1000,6)
+    dt,                  # (1,1000)
+    coeffs=None,
+    n_steps: int = 25,
+    select_idx=None,
+    model_outputs_derivative: bool = True,
+):
+    device = y0.device
+    # flatten y0: (1,1000,6) -> (1000,6)
+    B = y0.shape[1]
+    x_pred = y0.reshape(B, 6)
+    dt_step = dt.reshape(B, 1)    # reshape dt: (1,1000) -> (1000,1)
+    # pick indices to store
+    if select_idx is None:
+        M = min(3, B)
+        select_idx = torch.arange(M, device=device)
+    else:
+        select_idx = torch.as_tensor(select_idx, device=device, dtype=torch.long)
+
+    traj_sel = [x_pred.index_select(0, select_idx)]
+    model.eval()
+
+    for _ in range(n_steps):
+        x_in  = x_pred.unsqueeze(1)                 # (1000,1,6)
+        dt_in = dt_step                             # (1000,1)
+
+        out = model((x_in, dt_in), coefficients=coeffs)  # (1000,1,6) or (1000,6)
+        dx  = out[:,0,:] if out.ndim == 3 else out       # (1000,6)
+
+        step = dx * dt_step if model_outputs_derivative else dx
+        x_pred = x_pred + step                           # (1000,6)
+
+        traj_sel.append(x_pred.index_select(0, select_idx))
+
+    # -> (M, n_steps+1, 6)
+    y_plot = torch.stack(traj_sel, dim=1).detach().cpu().numpy()
+    which  = select_idx.detach().cpu().tolist()
+    return y_plot, which
+
+# ========================== Training ==============================
 
 # Train the first basis function
 num_epochs = 1000
@@ -135,7 +185,7 @@ for k in range(num_basis - 1):
         explained_variance_ratio, *_ = compute_explained_variance(model)
         scores.append(explained_variance_ratio)
 
-# Plot results
+# =====================Plot results ==========================
 import matplotlib.pyplot as plt
 
 model.eval()
@@ -143,7 +193,7 @@ with torch.no_grad():
     dataloader_eval = DataLoader(dataset, batch_size=1)
     batch = next(iter(dataloader_eval))
 
-    _, y0, dt, y1, y0_example, dt_example, y1_example = batch
+    orbital_rate, y0, dt, y1, y0_example, dt_example, y1_example = batch
     y0 = y0.to(device)
     dt = dt.to(device)
     y1 = y1.to(device)
@@ -157,51 +207,79 @@ with torch.no_grad():
     coefficients, _ = model.compute_coefficients((y0_example, dt_example), y1_example)
     
     # Generate a trajectory by integration
-    _mu = torch.tensor(1.0, device=device)  # Van der Pol parameter
-    _y0 = torch.empty(1, 2, device=device).uniform_(
-        *dataloader.dataset.y0_range
-        )    
+    params = CWHParams(orbital_rate=orbital_rate[0].item())  # Use orbital rate from batch
+
     _c = coefficients[0:1]  # Use first set of coefficients
     
-    s = 0.1  # Time step for simulation
-    n = int(10 / s)  # Number of steps for 10 time units
-    _dt = torch.tensor([s], device=device)
-    
-    # Integrate the true trajectory
-    x_true = _y0.clone()
-    y_true = [x_true]
+    s = 20.0          # Time step for simulation
+    n = 25           # Number of steps
+
+    # --- Integrate the true trajectory ---
+    x_true = y0[0,0].clone().cpu()      # shape (6,)
+    y_true = [x_true.numpy()]
     for k in range(n):
-        x_true = rk4_step(van_der_pol, x_true, _dt, mu=_mu) + x_true
-        y_true.append(x_true)
-    y_true = torch.cat(y_true, dim=0).detach().cpu().numpy()
-    
-    # Integrate the predicted trajectory
-    x_pred = _y0.clone().unsqueeze(1)  # Add batch dimension
-    _dt_batch = _dt.unsqueeze(0)
-    y_pred = [x_pred]
-    for k in range(n):
-        x_pred = model((x_pred, _dt_batch), coefficients=_c) + x_pred
-        y_pred.append(x_pred)
-    y_pred = torch.cat(y_pred, dim=1).squeeze(0).detach().cpu().numpy()
+        x_np = x_true.detach().cpu().numpy()  
+        u = np.zeros(3) 
+
+        # Manual RK4 with numpy cwh
+        k1 = cwh(x_np, u, params)
+        k2 = cwh(x_np + s*k1/2, u, params)
+        k3 = cwh(x_np + s*k2/2, u, params)
+        k4 = cwh(x_np + s*k3, u, params)
+        
+        dx = s * (k1 + 2*k2 + 2*k3 + k4) / 6
+        # dx = rk4_step(cwh, x_true, s, u=u, params=params)
+        x_true = x_true + torch.from_numpy(dx)
+        y_true.append(x_true.numpy())
+    # Stack along the time dimension -> shape (n+1, 6)
+    y_true = np.stack(y_true, axis=0)
+
+    # # --- Integrate the predicted trajectory ---
+    # x_pred = y0[0,0].clone()      # shape (6,)
+    # y_pred = [x_pred]
+    # _dt = torch.tensor([s], device=device)  # shape (1,)
+
+    # for k in range(n):
+    #     # model expects batch dimensions: (batch, state_dim) and (batch, 1)
+    #     x_in = x_pred.unsqueeze(0).unsqueeze(0)        # shape (1,1, 6)
+    #     dt_in = _dt.unsqueeze(0)         #[1,1]
+    #     dx_pred = model((x_in, dt_in), coefficients=_c)[0]
+    #     x_pred = x_pred + dx_pred
+    #     y_pred.append(x_pred.view(-1))
+    # # Stack along time dimension -> shape (n+1, 6)
+    # y_pred = torch.stack(y_pred, dim=0).detach().cpu().numpy()
+
+    y_pred, which = prediction_subset(
+        model,
+        y0=y0, 
+        dt=dt, 
+        coeffs=_c,
+        n_steps=n,
+        select_idx=[0, 3, 7],   # choose any few to visualize; or leave None to take first few
+        model_outputs_derivative=False,
+
+    )
     
     # Plot the trajectories
-    fig, ax = plt.subplots(figsize=(8, 8))
+    fig, ax = plt.subplots(figsize=(3, 5.5))
     ax.plot(y_true[:, 0], y_true[:, 1], label="True", linewidth=2, color='blue')
-    ax.plot(y_pred[:, 0], y_pred[:, 1], label="Predicted", linewidth=2, linestyle='--', color='orange')
-    ax.scatter(_y0[0, 0].cpu(), _y0[0, 1].cpu(), s=100, c='green', marker='o', label="Start", zorder=5)
-    ax.set_xlabel("x1")
-    ax.set_ylabel("x2")
-    ax.set_title("Phase Space Trajectory: x1 vs x2")
+    curve = y_pred[0] #(26,6)
+    ax.plot(curve[:, 0], curve[:, 1], label="Predicted", linewidth=2, linestyle='--', color='orange')
+    start_state = y0[0, 0]  # Extract the (6,) state vector
+    ax.scatter(start_state[0].cpu(), start_state[1].cpu(), s=100, c='green', marker='o', label="Predicted", zorder=5)
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_title("CWH System Phase Space Trajectory: x vs y")
     ax.legend()
     ax.grid(True, alpha=0.3)
-    ax.set_xlim(-3, 3)
-    ax.set_ylim(-3, 3)
+    # FONTS: 8pt, 300dpi, .png, timesnewroman, no titles, shared axes and labels for multiplots, annotations instead of titles for multiplots, if shared legends put outside all plots, fig.legend(loc="outside right upper")
     plt.show()
 
     # Visualize individual basis functions
     fig, axes = plt.subplots(2, 5, figsize=(15, 6))
     axes = axes.flatten()
     
+    # Create 6D input grid (we'll visualize in x-y plane, setting other dimensions to 0)
     x1_range = torch.linspace(-2, 2, 20).to(device)
     x2_range = torch.linspace(-2, 2, 20).to(device)
     dt_plot = torch.full((1, 400), 0.1, device=device)  # Make it (1, 400) to match y0_plot
@@ -210,19 +288,21 @@ with torch.no_grad():
         if i >= num_basis or i >= len(axes):
             break
             
-        x1_grid, x2_grid = torch.meshgrid(x1_range, x2_range, indexing='ij')
+        x1_grid, x2_grid = torch.meshgrid(x1_range, x2_range, indexing='xy')
         x1_flat = x1_grid.flatten().unsqueeze(0).unsqueeze(-1)
         x2_flat = x2_grid.flatten().unsqueeze(0).unsqueeze(-1)
-        y0_plot = torch.cat([x1_flat, x2_flat], dim=-1)
+        # Create 6D input with zeros for z, x_dot, y_dot, z_dot
+        zeros = torch.zeros_like(x1_flat)
+        y0_plot = torch.cat([x1_flat, x2_flat, zeros, zeros, zeros, zeros], dim=-1)
         
         basis_output = basis_fn((y0_plot, dt_plot))
         output_x1 = basis_output[0, :, 0].reshape(20, 20).detach().cpu().numpy()
         output_x2 = basis_output[0, :, 1].reshape(20, 20).detach().cpu().numpy()
         
-        axes[i].quiver(x1_grid.cpu().numpy(), x2_grid.cpu().numpy(), 
-                      output_x1, output_x2, alpha=0.6)
-        axes[i].set_xlabel("x1")
-        axes[i].set_ylabel("x2")
+        axes[i].streamplot(x1_grid.cpu().numpy(), x2_grid.cpu().numpy(), 
+                   output_x1, output_x2, density=1.5, color='blue')
+        axes[i].set_xlabel("x")
+        axes[i].set_ylabel("y")
         axes[i].set_title(f"Basis Function {i+1}")
         axes[i].set_xlim(-2, 2)
         axes[i].set_ylim(-2, 2)
@@ -280,3 +360,10 @@ with torch.no_grad():
 
     plt.tight_layout()
     plt.show()
+
+with torch.no_grad():
+    x0 = y0.reshape(-1,6)[0:1].unsqueeze(1)  # (1,1,6)
+    eps = torch.randn_like(x0) * 1e-3
+    g0  = model.basis_functions((x0, dt.reshape(-1,1)[0:1]))  # expect (1,1,K,6) or (1,1,6,K)
+    g1  = model.basis_functions(((x0+eps), dt.reshape(-1,1)[0:1]))
+    print("‖g1-g0‖ =", (g1-g0).norm().item())

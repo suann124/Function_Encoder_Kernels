@@ -93,8 +93,15 @@ class FunctionEncoder(torch.nn.Module):
         Returns:
             torch.Tensor: Function values at x [batch_size, n_points, n_features]
         """
+        
         g = self.basis_functions(x)
+        if g.dim() == 5 and g.size(-3) == 1:
+            g = g.squeeze(-3)   # [B,M,D,K]
         y = torch.einsum("bmdk,bk->bmd", g, coefficients)
         if self.residual_function is not None:
-            y = y + self.residual_function(x).detach()
+            y = y + self.residual_function(x) 
+
+        # print("g shape:", g.shape)   # expect (B,M,K,D)
+        
         return y
+

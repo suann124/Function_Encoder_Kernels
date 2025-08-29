@@ -11,7 +11,6 @@ def rk4_step(func, x, dt, **ode_kwargs):
     k4 = func(t + dt, x + dt.unsqueeze(-1) * k3, **ode_kwargs)
     return (dt / 6).unsqueeze(-1) * (k1 + 2 * k2 + 2 * k3 + k4)
 
-
 class ODEFunc(torch.nn.Module):
     """A wrapper for a PyTorch model to make it compatible with ODE solvers.
 
@@ -27,13 +26,19 @@ class ODEFunc(torch.nn.Module):
         """Compute the time derivative at the current state.
 
         Args:
-            t (torch.Tensor): Current time
+            t (torch.Tensor): Current time 
             x (torch.Tensor): Current state
 
         Returns:
             torch.Tensor: The time derivative dx/dt at the current state
         """
-        tx = torch.cat([t.unsqueeze(-1), x], dim=-1)  # Concatenate time and state
+        while t.dim() < x.dim() - 1:
+            t = t.unsqueeze(-1)  # grow to match all but last dim
+        if t.dim() == x.dim() - 1:
+            t = t.unsqueeze(-1)  # final singleton at the feature axis
+
+        t = t.expand(*x.shape[:-1], 1)
+        tx = torch.cat([t, x], dim=-1)  # Concatenate time and state
         return self.model(tx)
 
 
