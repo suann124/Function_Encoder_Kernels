@@ -7,12 +7,13 @@ from typing import List, Tuple
 import tqdm
 from copy import deepcopy
 
-from my_datasets.polynomial import PolynomialDataset
+from my_datasets.van_der_pol import VanDerPolDataset, van_der_pol
 
 import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from function_encoder.model.mlp import MLP
+from function_encoder.model.neural_ode import NeuralODE, ODEFunc, rk4_step
 from function_encoder.function_encoder import BasisFunctions, FunctionEncoder
 from function_encoder.utils.training import train_step
 
@@ -23,19 +24,23 @@ class TrainPruneAnalyzer:
         
     def train_full_model(self, 
                         num_basis: int, 
-                        dataset: PolynomialDataset,
+                        dataset: VanDerPolDataset,
                         num_epochs: int = 2000,
                         batch_size: int = 50) -> FunctionEncoder:
         """Train a model with all basis functions from scratch."""
         
         print(f"Training full model with {num_basis} basis functions...")
-        
-        # Create model with all basis functions
+
         def basis_function_factory():
-            return MLP(layer_sizes=[1, 32, 1])
+            return NeuralODE(
+                ode_func=ODEFunc(
+                    model=MLP(layer_sizes=[3, 64, 64, 2], activation=torch.nn.ReLU())
+                ),
+                integrator=rk4_step,
+            )
         
-        all_basis_functions = BasisFunctions(*[basis_function_factory() for _ in range(num_basis)])
-        model = FunctionEncoder(all_basis_functions).to(self.device)
+        basis_functions = BasisFunctions(*[basis_function_factory() for _ in range(num_basis)])
+        model = FunctionEncoder(basis_functions).to(self.device)
         
         # Setup training
         dataloader = DataLoader(dataset, batch_size=batch_size)
@@ -50,7 +55,7 @@ class TrainPruneAnalyzer:
                 losses.append(loss)
                 pbar.set_postfix({"loss": f"{loss:.2e}"})
         
-        return all_basis_functions, model, losses
+        return model, losses
     
     def analyze_basis_importance(self, 
                                model: FunctionEncoder, 
@@ -94,15 +99,11 @@ class TrainPruneAnalyzer:
             pc_scores = coefficients_centered @ eigenvectors
             
             return eigenvalues, eigenvectors, explained_variance_ratio
-
-    def cos_similarity(self, a, b):
-        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
+    
     def identify_redundant_basis(self, 
                                eigenvalues: np.ndarray,
                                eigenvectors: np.ndarray,
                                explained_variance_ratio: np.ndarray,
-                               basis_funcs: np.ndarray,
                                variance_threshold: float = 0.99) -> List[int]:
         """Identify which basis functions to keep based on PCA analysis."""
         
@@ -116,37 +117,15 @@ class TrainPruneAnalyzer:
         # Look at the loadings (eigenvectors)
         n_basis = eigenvectors.shape[0]
         basis_importance = np.zeros(n_basis)
-
-        # ============= Method 1: Eigenvalues weighted PCs =============
-        weighted_eig = np.zeros(n_basis)
+        
+        # Weight each basis by its contribution to important PCs
         for i in range(n_components):
-            weighted_eig += np.abs(eigenvectors[:, i]) * eigenvalues[i]   
-            best_aligned_basis = np.argsort(weighted_eig)[::-1][:n_components]     
-
-        # # ============= Method 2: Basis alignment =============
-        # top_k_eig_idx = np.argsort(eigenvalues)[::-1][:n_components] #sort, reverse, slice to k basis
-        # important_pcs = eigenvectors[:, top_k_eig_idx]
-
-        # # Align basis functions to important PCs
-        # basis_alignment = np.zeros((n_basis, n_components))
-        # for i in range(n_basis):
-        #     for j in range(n_components):
-        #         basis_alignment[i, j] = self.cos_similarity(
-        #             important_pcs[:, j],      # PC j (column)
-        #             eigenvectors[i,:]        # basis i (column)
-        #         )
+            basis_importance += np.abs(eigenvectors[:, i]) * eigenvalues[i]
         
-        # best_aligned_basis = np.argmax(basis_alignment, axis=0)
-
-        # ================= Method 3: PC Components loadings =============
-        # basis_alignment = important_pcs                                            # (n_basis, k)
-        # alignment_abs = np.abs(basis_alignment)
-        # best_aligned_basis = np.argmax(alignment_abs, axis=0)
+        # Sort basis by importance
+        important_basis_indices = np.argsort(basis_importance)[::-1][:n_components] #sort, reverse, slice to k basis
         
-        # ================= prints =================
-        # print(basis_alignment)
-        print(f"Best aligned basis: {best_aligned_basis}")
-        return sorted(best_aligned_basis.tolist())
+        return sorted(important_basis_indices.tolist())
     
     def prune_model(self, 
                    model: FunctionEncoder, 
@@ -404,18 +383,17 @@ if __name__ == "__main__":
     analyzer = TrainPruneAnalyzer()
     
     # Create dataset
-    n_points=100
     dataset = PolynomialDataset(n_points=100, n_example_points=100, degree=3)
     
     # Step 1: Train full model
     num_basis = 20  # Start with many basis functions
-    all_basis_functions, full_model, train_losses = analyzer.train_full_model(num_basis, dataset, num_epochs=2000)
+    full_model, train_losses = analyzer.train_full_model(num_basis, dataset, num_epochs=2000)
     
     # Step 2: Analyze basis importance
     eigenvalues, eigenvectors, explained_var = analyzer.analyze_basis_importance(full_model, dataset)
-
+    
     # Step 3: Identify which basis to keep
-    keep_indices = analyzer.identify_redundant_basis(eigenvalues, eigenvectors, explained_var, all_basis_functions, variance_threshold=0.99)
+    keep_indices = analyzer.identify_redundant_basis(eigenvalues, eigenvectors, explained_var, variance_threshold=0.99)
     print(f"\nKeeping basis functions at indices: {keep_indices}")
     
     # Step 4: Create pruned model
@@ -462,54 +440,54 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.show()
 
-    # os.makedirs('results', exist_ok=True)
-    # np.savez('results/pca_results_poly.npz', 
-    #      eigenvalues=eigenvalues, 
-    #      eigenvectors=eigenvectors, 
-    #      explained_var=explained_var, 
-    #      keep_indices=np.array(keep_indices))
+    os.makedirs('results', exist_ok=True)
+    np.savez('results/pca_results_poly.npz', 
+         eigenvalues=eigenvalues, 
+         eigenvectors=eigenvectors, 
+         explained_var=explained_var, 
+         keep_indices=np.array(keep_indices))
 
-    # # Convert tensors to numpy for saving
-    # comparison_to_save = {
-    #     'mse_original': comparison_results['mse_original'],
-    #     'mse_pruned': comparison_results['mse_pruned'],
-    #     'mse_pruned_refined': comparison_results['mse_pruned_refined'],
-    #     'y_pred_original': comparison_results['y_pred_original'].cpu().numpy(),
-    #     'y_pred_pruned': comparison_results['y_pred_pruned'].cpu().numpy(),
-    #     'y_pred_pruned_refined': comparison_results['y_pred_pruned_refined'].cpu().numpy(),
-    #     'coeffs_original': comparison_results['coeffs_original'].cpu().numpy(),
-    #     'coeffs_pruned': comparison_results['coeffs_pruned'].cpu().numpy(),
-    #     'coeffs_pruned_refined': comparison_results['coeffs_pruned_refined'].cpu().numpy(),
-    # }
-    # np.savez('results/comparison_results_poly.npz', **comparison_to_save)
+    # Convert tensors to numpy for saving
+    comparison_to_save = {
+        'mse_original': comparison_results['mse_original'],
+        'mse_pruned': comparison_results['mse_pruned'],
+        'mse_pruned_refined': comparison_results['mse_pruned_refined'],
+        'y_pred_original': comparison_results['y_pred_original'].cpu().numpy(),
+        'y_pred_pruned': comparison_results['y_pred_pruned'].cpu().numpy(),
+        'y_pred_pruned_refined': comparison_results['y_pred_pruned_refined'].cpu().numpy(),
+        'coeffs_original': comparison_results['coeffs_original'].cpu().numpy(),
+        'coeffs_pruned': comparison_results['coeffs_pruned'].cpu().numpy(),
+        'coeffs_pruned_refined': comparison_results['coeffs_pruned_refined'].cpu().numpy(),
+    }
+    np.savez('results/comparison_results_poly.npz', **comparison_to_save)
 
-    # # Save data for function approximation plot (4th plot)
-    # np.savez('results/function_approximation_poly.npz',
-    #         X_sorted=X_sorted,
-    #         y_sorted=y_sorted,
-    #         y_pred_orig=y_pred_orig,
-    #         y_pred_pruned=y_pred_pruned,
-    #         y_pred_pruned_refined=y_pred_pruned_refined,
-    #         example_X=example_X[0].cpu().numpy(),
-    #         example_y=example_y[0].cpu().numpy())
+    # Save data for function approximation plot (4th plot)
+    np.savez('results/function_approximation_poly.npz',
+            X_sorted=X_sorted,
+            y_sorted=y_sorted,
+            y_pred_orig=y_pred_orig,
+            y_pred_pruned=y_pred_pruned,
+            y_pred_pruned_refined=y_pred_pruned_refined,
+            example_X=example_X[0].cpu().numpy(),
+            example_y=example_y[0].cpu().numpy())
 
-    # # Save data for coefficient comparison plot (5th plot)
-    # np.savez('results/coeff_comparison_poly.npz',
-    #         coeffs_orig=coeffs_orig,
-    #         coeffs_pruned=coeffs_pruned,
-    #         coeffs_pruned_refined=coeffs_pruned_refined)
+    # Save data for coefficient comparison plot (5th plot)
+    np.savez('results/coeff_comparison_poly.npz',
+            coeffs_orig=coeffs_orig,
+            coeffs_pruned=coeffs_pruned,
+            coeffs_pruned_refined=coeffs_pruned_refined)
 
-    # # Save performance summary as JSON
-    # import json
-    # summary = {
-    #     "mse_original": float(comparison_results['mse_original']),
-    #     "mse_pruned": float(comparison_results['mse_pruned']),
-    #     "mse_pruned_refined": float(comparison_results['mse_pruned_refined']),
-    #     "n_basis_original": len(original_model.basis_functions.basis_functions),
-    #     "n_basis_pruned": len(pruned_model.basis_functions.basis_functions),
-    #     "n_basis_pruned_refined": len(pruned_model_refined.basis_functions.basis_functions),
-    #     "compression_ratio": len(pruned_model_refined.basis_functions.basis_functions) / len(original_model.basis_functions.basis_functions),
-    #     "performance_ratio": comparison_results['mse_pruned_refined'] / comparison_results['mse_original'],
-    # }
-    # with open('results/performance_summary_poly.json', 'w') as f:
-    #     json.dump(summary, f, indent=2)
+    # Save performance summary as JSON
+    import json
+    summary = {
+        "mse_original": float(comparison_results['mse_original']),
+        "mse_pruned": float(comparison_results['mse_pruned']),
+        "mse_pruned_refined": float(comparison_results['mse_pruned_refined']),
+        "n_basis_original": len(original_model.basis_functions.basis_functions),
+        "n_basis_pruned": len(pruned_model.basis_functions.basis_functions),
+        "n_basis_pruned_refined": len(pruned_model_refined.basis_functions.basis_functions),
+        "compression_ratio": len(pruned_model_refined.basis_functions.basis_functions) / len(original_model.basis_functions.basis_functions),
+        "performance_ratio": comparison_results['mse_pruned_refined'] / comparison_results['mse_original'],
+    }
+    with open('results/performance_summary_poly.json', 'w') as f:
+        json.dump(summary, f, indent=2)

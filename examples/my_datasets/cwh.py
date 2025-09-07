@@ -161,3 +161,6 @@ class CWHDataset(IterableDataset):
             
             yield orbital_rate_tensor, y0, dt, y1, y0_example, dt_example, y1_example
 
+
+# Randomize orbital rate
+

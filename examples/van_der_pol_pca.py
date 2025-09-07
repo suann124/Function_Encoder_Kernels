@@ -26,7 +26,8 @@ torch.manual_seed(42)
 # Load dataset
 
 dataset = VanDerPolDataset(
-    integrator=rk4_step, n_points=1000, n_example_points=100, dt_range=(0.1, 0.1)
+    # integrator=rk4_step, 
+    n_points=1000, n_example_points=100, dt_range=(0.1, 0.1)
 )
 dataloader = DataLoader(dataset, batch_size=50)
 dataloader_iter = iter(dataloader)

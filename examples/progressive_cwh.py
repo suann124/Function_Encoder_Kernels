@@ -94,6 +94,7 @@ def loss_function(model, batch):
     pred_loss = torch.nn.functional.mse_loss(y_pred, y1)
 
     return pred_loss
+    # add state back in mse loss
 
 @torch.no_grad()
 def prediction_subset(
@@ -234,31 +235,31 @@ with torch.no_grad():
     # Stack along the time dimension -> shape (n+1, 6)
     y_true = np.stack(y_true, axis=0)
 
-    # # --- Integrate the predicted trajectory ---
-    # x_pred = y0[0,0].clone()      # shape (6,)
-    # y_pred = [x_pred]
-    # _dt = torch.tensor([s], device=device)  # shape (1,)
+    # --- Integrate the predicted trajectory ---
+    x_pred = y0[0,0].clone()      # shape (6,)
+    y_pred = [x_pred]
+    _dt = torch.tensor([s], device=device)  # shape (1,)
 
-    # for k in range(n):
-    #     # model expects batch dimensions: (batch, state_dim) and (batch, 1)
-    #     x_in = x_pred.unsqueeze(0).unsqueeze(0)        # shape (1,1, 6)
-    #     dt_in = _dt.unsqueeze(0)         #[1,1]
-    #     dx_pred = model((x_in, dt_in), coefficients=_c)[0]
-    #     x_pred = x_pred + dx_pred
-    #     y_pred.append(x_pred.view(-1))
-    # # Stack along time dimension -> shape (n+1, 6)
-    # y_pred = torch.stack(y_pred, dim=0).detach().cpu().numpy()
+    for k in range(n):
+        # model expects batch dimensions: (batch, state_dim) and (batch, 1)
+        x_in = x_pred.unsqueeze(0).unsqueeze(0)        # shape (1,1, 6)
+        dt_in = _dt.unsqueeze(0)         #[1,1]
+        dx_pred = model((x_in, dt_in), coefficients=_c)[0]
+        x_pred = x_pred + dx_pred
+        y_pred.append(x_pred.view(-1))
+    # Stack along time dimension -> shape (n+1, 6)
+    y_pred = torch.stack(y_pred, dim=0).detach().cpu().numpy()
 
-    y_pred, which = prediction_subset(
-        model,
-        y0=y0, 
-        dt=dt, 
-        coeffs=_c,
-        n_steps=n,
-        select_idx=[0, 3, 7],   # choose any few to visualize; or leave None to take first few
-        model_outputs_derivative=False,
+    # y_pred, which = prediction_subset(
+    #     model,
+    #     y0=y0, 
+    #     dt=dt, 
+    #     coeffs=_c,
+    #     n_steps=n,
+    #     select_idx=[0, 3, 7],   # choose any few to visualize; or leave None to take first few
+    #     model_outputs_derivative=False,
 
-    )
+    # )
     
     # Plot the trajectories
     fig, ax = plt.subplots(figsize=(3, 5.5))
