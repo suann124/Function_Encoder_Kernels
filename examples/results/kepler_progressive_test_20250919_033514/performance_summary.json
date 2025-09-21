@@ -1,6 +1,0 @@
-{
-  "problem_type": "kepler",
-  "method": "progressive",
-  "num_basis_final": 2,
-  "final_loss": 0.02
-}

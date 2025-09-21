@@ -15,7 +15,7 @@ from function_encoder.utils.experiment_saver import ExperimentSaver, create_visu
 import tqdm
 
 if torch.cuda.is_available():
-    device = "cuda"
+    device = "cuda:1"
 elif torch.backends.mps.is_available():
     device = "mps"
 else:
@@ -35,12 +35,12 @@ dataset = KeplerDataset(
 dataloader = DataLoader(dataset, batch_size=50)
 dataloader_iter = iter(dataloader)
 
+# LOSS_THRESHOLD = 1e-4
+
 # Create model
-
-
 def basis_function_factory():
     return NeuralODE(
-        ode_func=ODEFunc(model=MLP(layer_sizes=[5, 128, 128, 4])),
+        ode_func=ODEFunc(model=MLP(layer_sizes=[5, 64, 64, 4])),
         integrator=rk4_step,
     )
 
@@ -56,7 +56,7 @@ model = FunctionEncoder(basis_functions).to(device)
 
 losses = []  # For plotting
 scores = []  # For plotting
-dataloader_coeffs = DataLoader(dataset, batch_size=100)
+dataloader_coeffs = DataLoader(dataset, batch_size=50)
 dataloader_coeffs_iter = iter(dataloader_coeffs)
 
 
@@ -141,10 +141,14 @@ for k in range(num_basis - 1):
             losses.append(loss)
             tqdm_bar.set_postfix({"loss": f"{loss:.2e}"})
 
+            # if loss <= LOSS_THRESHOLD:
+            #     print(f"Reached target loss with {k+2} basis functions.")
+
     model.eval()
     with torch.no_grad():
         explained_variance_ratio, *_ = compute_explained_variance(model)
         scores.append(explained_variance_ratio)
+
 
 # Plot results
 
@@ -200,15 +204,15 @@ with torch.no_grad():
         marker="o",
         label="Covariance Matrix",
     )
-    ax3.plot(
-        range(1, len(gram_eigenvalues) + 1),
-        gram_eigenvalues,
-        marker="s",
-        label="Gram Matrix",
-    )
+    # ax3.plot(
+    #     range(1, len(gram_eigenvalues) + 1),
+    #     gram_eigenvalues,
+    #     marker="s",
+    #     label="Gram Matrix",
+    # )
     ax3.set_xlabel("Eigenvalue Index")
     ax3.set_ylabel("Eigenvalue")
-    ax3.set_yscale("log")
+    # ax3.set_yscale("log")
     ax3.legend()
     ax3.grid(True)
     ax3.set_title("Eigenvalue Comparison")
@@ -382,7 +386,7 @@ experiment_data = saver.prepare_progressive_data(
     }
 )
 
-saver.save_experiment("kepler", "progressive", experiment_data, dataset_name="dt01")
+saver.save_experiment("kepler", "progressive", experiment_data, dataset_name="64")
 
 print(
     f"Training completed with {len(model.basis_functions.basis_functions)} basis functions"

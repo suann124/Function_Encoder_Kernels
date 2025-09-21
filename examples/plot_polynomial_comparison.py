@@ -12,6 +12,7 @@ def main():
 
     parser = argparse.ArgumentParser(description='Plot comparison between polynomial degrees 3, 4, and 5')
     parser.add_argument('--save-dir', type=str, default='plots', help='Directory to save plots')
+    parser.add_argument('--save-as', type=str, help='Custom filename for the plot (without extension)')
     args = parser.parse_args()
 
     plotter = ExperimentPlotter()
@@ -19,19 +20,14 @@ def main():
     # Find the most recent experiments for each degree
     results_dir = Path("results")
 
-    # Look for degree 3 experiments (multiple naming patterns)
-    d3_paths = []
-    d3_paths.extend(list(results_dir.glob("polynomial_progressive_poly_degree3_*")))  # poly_degree3 pattern
-    d3_paths.extend(list(results_dir.glob("polynomial_progressive_polynomial_d3_*")))  # polynomial_d3 pattern
-    # Also check for any polynomial experiments without specific degree in name
-    general_poly = list(results_dir.glob("polynomial_progressive_polynomial_*"))
-    d3_paths.extend([p for p in general_poly if "polynomial_d" not in p.name])
+    # Look for degree 3 experiments
+    d3_paths = list(results_dir.glob("polynomial_progressive_d3*"))
 
     # Look for degree 4
-    d4_paths = list(results_dir.glob("polynomial_progressive_polynomial_d4_*"))
+    d4_paths = list(results_dir.glob("polynomial_progressive_d4*"))
 
     # Look for degree 5
-    d5_paths = list(results_dir.glob("polynomial_progressive_polynomial_d5_*"))
+    d5_paths = list(results_dir.glob("polynomial_progressive_d5*"))
 
     if not d3_paths:
         print("❌ No degree 3 experiments found. Please run polynomial_pca.py first.")

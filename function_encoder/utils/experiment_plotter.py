@@ -6,7 +6,7 @@ from .experiment_saver import ExperimentSaver
 
 # Set global rcParams for consistent formatting
 plt.rcParams.update({
-    'font.family': 'sans-serif',
+    'font.family': 'serif',
     'font.size': 8,
     'figure.figsize': (5.5, 3),
     'figure.dpi': 300,
@@ -417,8 +417,9 @@ class ExperimentPlotter:
                     markersize=4,
                 )
 
-                # Only show x-label and x-ticks on bottom row
-                ax_eigen.set_xlabel("Eigenvalue Index")
+                # Only show x-label on bottom middle plot (col == 1)
+                if col == 1:
+                    ax_eigen.set_xlabel("Eigenvalue Index")
 
                 # Only show y-label and y-ticks on leftmost plot
                 if col == 0:
@@ -436,8 +437,9 @@ class ExperimentPlotter:
                 ax_eigen.text(0.5, 0.5, 'No scores data available',
                             ha='center', va='center', transform=ax_eigen.transAxes)
 
-                # Only show x-label and x-ticks on bottom row
-                ax_eigen.set_xlabel("Eigenvalue Index")
+                # Only show x-label on bottom middle plot (col == 1)
+                if col == 1:
+                    ax_eigen.set_xlabel("Eigenvalue Index")
 
                 # Only show y-label and y-ticks on leftmost plot
                 if col == 0:
@@ -447,16 +449,18 @@ class ExperimentPlotter:
 
         plt.tight_layout()
         if save_dir:
-            plt.savefig(save_dir / "polynomial_degree_comparison.png", bbox_inches='tight')
+            plt.savefig(save_dir / "polynomial_degree_comparison.png", bbox_inches='tight', dpi=300)
         plt.show()
 
     def plot_method_comparison(self, progressive_path: Union[str, Path],
                               prune_path: Union[str, Path],
-                              save_dir: Optional[str] = None):
+                              save_dir: Optional[str] = None,
+                              custom_filename: Optional[str] = None):
         """
         Plot comparison between progressive and train-then-prune methods.
 
-        Creates a 1x2 plot showing eigenvalue spectra side by side.
+        Creates a 1x2 plot showing eigenvalue spectra (explained variance ratios) side by side,
+        matching the format of ax2 in kepler_pca.py.
         """
 
         # Load experiment data
@@ -469,87 +473,78 @@ class ExperimentPlotter:
 
         fig, axes = plt.subplots(1, 2, figsize=(5.5, 3))
 
-        datasets = [data_progressive, data_prune]
+        # Progressive method (left plot) - show explained variance progression like ax2 in kepler_pca.py
+        ax = axes[0]
 
-        # Collect all eigenvalues for consistent scaling
-        all_eigenvalues = []
-
-        # Progressive method - final eigenvalues
-        scores = []
+        # Reconstruct scores from progressive data
+        progressive_scores = []
         pca_data = data_progressive["pca_data"]
         if "num_scores" in pca_data:
             num_scores = pca_data["num_scores"]
             for i in range(num_scores):
                 score_key = f"score_{i}"
                 if score_key in pca_data:
-                    scores.append(pca_data[score_key])
-        if scores:
-            all_eigenvalues.extend(scores[-1])  # Final eigenvalues
+                    progressive_scores.append(pca_data[score_key])
 
-        # Train-then-prune method - explained variance ratio
-        if "explained_variance_ratio" in data_prune["pca_data"]:
-            all_eigenvalues.extend(data_prune["pca_data"]["explained_variance_ratio"])
+        if progressive_scores:
+            # Plot only the final (max basis) eigenvalue spectrum
+            final_scores = progressive_scores[-1]  # Last stage = max basis
+            # Convert to numpy if it's a tensor
+            if hasattr(final_scores, 'cpu'):
+                final_scores = final_scores.cpu().numpy()
 
-        for col, data in enumerate(datasets):
-            ax = axes[col]
-
-            if col == 0:  # Progressive method
-                # Reconstruct scores for eigenvalue spectrum
-                scores = []
-                pca_data = data["pca_data"]
-                if "num_scores" in pca_data:
-                    num_scores = pca_data["num_scores"]
-                    for i in range(num_scores):
-                        score_key = f"score_{i}"
-                        if score_key in pca_data:
-                            scores.append(pca_data[score_key])
-
-                if scores:
-                    # Plot final (10th basis) eigenvalue spectrum
-                    final_score = scores[-1]
-                    ax.plot(
-                        range(1, len(final_score) + 1),
-                        final_score,
-                        marker="o",
-                        markersize=4,
-                    )
-                else:
-                    ax.text(0.5, 0.5, 'No scores data available',
-                           ha='center', va='center', transform=ax.transAxes)
-
-            else:  # Train-then-prune method
-                pca_data = data["pca_data"]
-                if "explained_variance_ratio" in pca_data:
-                    explained_var = pca_data["explained_variance_ratio"]
-                    ax.plot(
-                        range(1, len(explained_var) + 1),
-                        explained_var,
-                        marker="o",
-                        markersize=4,
-                    )
-                else:
-                    ax.text(0.5, 0.5, 'No eigenvalue data available',
-                           ha='center', va='center', transform=ax.transAxes)
-
-            # Only show y-label and y-ticks on leftmost plot
-            if col == 0:
-                ax.set_ylabel("Explained\nVariance Ratio")
-            else:
-                ax.tick_params(axis='y', left=False, labelleft=False)
-
-            # Only show x-label on bottom row (all plots in this case)
+            ax.plot(
+                range(1, len(final_scores) + 1),
+                final_scores,
+                marker="o",
+                markersize=3,
+                color='blue',
+                label=f"k = {len(progressive_scores)}",
+            )
             ax.set_xlabel("Eigenvalue Index")
-
-            # Set consistent y-limits
-            if all_eigenvalues:
-                ax.set_ylim(min(all_eigenvalues) * 0.9, max(all_eigenvalues) * 1.1)
-
+            ax.set_ylabel("Explained Variance Ratio")
             ax.set_yscale("log")
             ax.grid(True)
+            print(f"Progressive: Found {len(progressive_scores)} stages")
+        else:
+            ax.text(0.5, 0.5, 'No progressive scores available',
+                   ha='center', va='center', transform=ax.transAxes)
+
+        # Train-then-prune method (right plot) - show final eigenvalue spectrum
+        ax = axes[1]
+
+        if "explained_variance_ratio" in data_prune["pca_data"]:
+            explained_var = data_prune["pca_data"]["explained_variance_ratio"]
+            ax.plot(
+                range(1, len(explained_var) + 1),
+                explained_var,
+                marker="o",
+                markersize=3,
+                color='red'
+            )
+            ax.set_xlabel("Eigenvalue Index")
+            ax.tick_params(axis='y', left=False, labelleft=False)  # Remove y-axis labels for right plot
+            ax.set_yscale("log")
+            ax.grid(True)
+            print(f"Train-then-prune: {len(explained_var)} components")
+        else:
+            ax.text(0.5, 0.5, 'No eigenvalue data available',
+                   ha='center', va='center', transform=ax.transAxes)
+
+        # # Add legend outside the subplots if there are labels
+        # handles_labels = []
+        # for ax in axes:
+        #     h, l = ax.get_legend_handles_labels()
+        #     handles_labels.extend(list(zip(h, l)))
+
+        # if handles_labels:
+        #     handles, labels = zip(*handles_labels)
+        #     fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 0.95), ncol=len(labels), frameon=False)
 
         plt.tight_layout()
         if save_dir:
-            plt.savefig(save_dir / "method_comparison.png", bbox_inches='tight')
+            filename = custom_filename if custom_filename else "Eig_spectrum_comparison.png"
+            plt.savefig(save_dir / filename, bbox_inches='tight', dpi=300)
         plt.show()
 
     def plot_prune_experiment(self, experiment_path: Union[str, Path], save_dir: Optional[str] = None):

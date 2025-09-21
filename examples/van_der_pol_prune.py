@@ -277,7 +277,7 @@ class VanDerPolPruneAnalyzer:
     def fine_tune_pruned_model(self,
                              model: FunctionEncoder,
                              dataset: VanDerPolDataset,
-                             num_epochs: int = 500,
+                             num_epochs: int = 1000,
                              batch_size: int = 50) -> Tuple[FunctionEncoder, List[float]]:
         """Fine-tune the pruned model."""
 
@@ -604,7 +604,7 @@ if __name__ == "__main__":
 
     # Step 1: Train full model
     num_basis = 10  # Start with many basis functions (reduced for faster training)
-    all_basis_functions, full_model, train_losses = analyzer.train_full_model(num_basis, dataset, num_epochs=200)
+    all_basis_functions, full_model, train_losses = analyzer.train_full_model(num_basis, dataset, num_epochs=1000)
 
     # Create a deep copy of the original model to preserve it for comparison
     import copy
@@ -621,7 +621,7 @@ if __name__ == "__main__":
     pruned_model = analyzer.prune_model(full_model, keep_indices)
 
     # Step 5: Fine-tune pruned model
-    pruned_model_refined, finetune_losses = analyzer.fine_tune_pruned_model(pruned_model, dataset, num_epochs=100)
+    pruned_model_refined, finetune_losses = analyzer.fine_tune_pruned_model(pruned_model, dataset, num_epochs=1000)
 
     # Step 6: Compare performance
     comparison_results = analyzer.compare_models(original_full_model, pruned_model, pruned_model_refined, dataset)
@@ -734,8 +734,8 @@ if __name__ == "__main__":
             "dt_range": (0.1, 0.1)
         },
         training_params={
-            "num_epochs_initial": 200,
-            "num_epochs_finetune": 100,
+            "num_epochs_initial": 1000,
+            "num_epochs_finetune": 1000,
             "learning_rate": 1e-3,
             "batch_size": 50
         }

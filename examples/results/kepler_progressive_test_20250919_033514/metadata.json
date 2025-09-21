@@ -1,9 +1,0 @@
-{
-  "problem_type": "kepler",
-  "method": "progressive",
-  "dataset_name": "test",
-  "timestamp": "20250919_033514",
-  "num_basis": 2,
-  "dataset_params": {},
-  "training_params": {}
-}

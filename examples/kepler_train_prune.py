@@ -20,7 +20,7 @@ from function_encoder.inner_products import standard_inner_product
 from function_encoder.utils.experiment_saver import ExperimentSaver, create_visualization_data_dynamics
 
 if torch.cuda.is_available():
-    device = "cuda"
+    device = "cuda:2"
 elif torch.backends.mps.is_available():
     device = "mps"
 else:
@@ -46,7 +46,7 @@ class KeplerTrainPruneAnalyzer:
     def basis_function_factory(self):
         """Create NeuralODE basis function like in kepler_pca.py"""
         return NeuralODE(
-            ode_func=ODEFunc(model=MLP(layer_sizes=[5, 64, 64, 4])),
+            ode_func=ODEFunc(model=MLP(layer_sizes=[5,64, 64, 4])),
             integrator=rk4_step,
         )
 
@@ -72,11 +72,11 @@ class KeplerTrainPruneAnalyzer:
     def train_full_model(self,
                         num_basis: int,
                         dataset: KeplerDataset,
-                        num_epochs: int = 100,
+                        num_epochs: int = 1000,
                         batch_size: int = 50) -> FunctionEncoder:
-        """Train a model with all basis functions from scratch."""
+        """Train a model with all basis functions simultaneously (batch training)."""
 
-        print(f"Training full model with {num_basis} basis functions...")
+        print(f"Training full model with {num_basis} basis functions using batch training...")
 
         # Create model with all basis functions
         all_basis_functions = BasisFunctions(*[self.basis_function_factory() for _ in range(num_basis)])
@@ -88,8 +88,8 @@ class KeplerTrainPruneAnalyzer:
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
         losses = []
 
-        # Training loop
-        with tqdm.tqdm(range(num_epochs), desc="Training full model") as pbar:
+        # Training loop - train all basis functions together
+        with tqdm.tqdm(range(num_epochs), desc="Training full model (batch)") as pbar:
             for epoch in pbar:
                 batch = next(dataloader_iter)
                 loss = train_step(model, optimizer, batch, self.loss_function)
@@ -225,7 +225,7 @@ class KeplerTrainPruneAnalyzer:
     def fine_tune_pruned_model(self,
                              model: FunctionEncoder,
                              dataset: KeplerDataset,
-                             num_epochs: int = 50,
+                             num_epochs: int = 1000,
                              batch_size: int = 50) -> Tuple[FunctionEncoder, List[float]]:
         """Fine-tune the pruned model."""
 
@@ -414,8 +414,8 @@ class KeplerTrainPruneAnalyzer:
         _c_orig = coeffs_orig[0].unsqueeze(0)
         _c_pruned = coeffs_pruned[0].unsqueeze(0)
         _c_pruned_refined = coeffs_pruned_refined[0].unsqueeze(0)
-        s = 0.01  # Time step for simulation
-        n = int(2.0 / s)  # Simulate for 2 time units
+        s = 0.1  # Time step for simulation
+        n = int(10.0 / s)  # Simulate for 2 time units
         _dt = torch.tensor([s], device=device)
 
         # Integrate the true trajectory
@@ -536,17 +536,11 @@ if __name__ == "__main__":
     # Create dataset
     dataset = analyzer.create_kepler_dataset()
 
-    # Step 1: Load pre-trained model or train from scratch
-    model_path = "kepler_pca_model.pth"
-    num_basis = 5  # Match the number from kepler_pca.py
-
-    try:
-        full_model = analyzer.load_pretrained_model(model_path, num_basis)
-    except:
-        print("Training new model...")
-        full_model = analyzer.train_full_model(num_basis, dataset, num_epochs=100)
-        # Save for future use
-        torch.save(full_model.state_dict(), "kepler_train_prune_model.pth")
+    # Step 1: Train from scratch using batch training
+    num_basis = 10  # Match the number from kepler_pca.py
+    full_model = analyzer.train_full_model(num_basis, dataset, num_epochs=1000)
+    # Save for future use
+    torch.save(full_model.state_dict(), "kepler_train_prune_model.pth")
 
     # Step 2: Analyze basis importance
     eigenvalues, eigenvectors, explained_var = analyzer.analyze_basis_importance(full_model, dataset)
@@ -559,7 +553,7 @@ if __name__ == "__main__":
     pruned_model = analyzer.prune_model(full_model, keep_indices)
 
     # Step 5: Fine-tune pruned model
-    pruned_model_refined, finetune_losses = analyzer.fine_tune_pruned_model(pruned_model, dataset, num_epochs=50)
+    pruned_model_refined, finetune_losses = analyzer.fine_tune_pruned_model(pruned_model, dataset, num_epochs=1000)
 
     # Step 6: Compare performance
     comparison_results = analyzer.compare_models(full_model, pruned_model, pruned_model_refined, dataset)
@@ -607,8 +601,8 @@ if __name__ == "__main__":
     _c_orig = coeffs_orig[0].unsqueeze(0)
     _c_pruned = coeffs_pruned[0].unsqueeze(0)
     _c_pruned_refined = coeffs_pruned_refined[0].unsqueeze(0)
-    s = 0.01
-    n = int(2.0 / s)
+    s = 0.1
+    n = int(10.0 / s)
     _dt = torch.tensor([s], device=device)
 
     # True trajectory
@@ -675,8 +669,8 @@ if __name__ == "__main__":
             "dt_range": (0.1, 0.1)
         },
         training_params={
-            "num_epochs_initial": 100,
-            "num_epochs_finetune": 50,
+            "num_epochs_initial": 1000,
+            "num_epochs_finetune": 100,
             "learning_rate": 1e-3,
             "batch_size": 50
         }
