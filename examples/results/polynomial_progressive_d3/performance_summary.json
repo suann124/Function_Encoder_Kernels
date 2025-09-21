@@ -1,0 +1,6 @@
+{
+  "problem_type": "polynomial",
+  "method": "progressive",
+  "num_basis_final": 10,
+  "final_loss": 4.829985755350208e-06
+}

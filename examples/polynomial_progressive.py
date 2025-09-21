@@ -1,5 +1,11 @@
 import matplotlib.pyplot as plt
 import tqdm
+
+import sys
+import os
+# Add parent directory to sys.path to import function_encoder
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from function_encoder.utils.training import train_step
 from function_encoder.losses import basis_normalization_loss
 from function_encoder.function_encoder import BasisFunctions, FunctionEncoder
@@ -7,12 +13,9 @@ from function_encoder.model.mlp import MLP
 import torch
 
 from torch.utils.data import DataLoader
-from datasets.polynomial import PolynomialDataset
+from my_datasets.polynomial import PolynomialDataset
 
-import sys
-import os
-# Add parent directory to sys.path to import function_encoder
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 
 
 if torch.cuda.is_available():

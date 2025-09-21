@@ -1,0 +1,14 @@
+{
+  "problem_type": "polynomial",
+  "method": "train_then_prune",
+  "num_basis_original": 20,
+  "num_basis_pruned": 4,
+  "compression_ratio": 0.2,
+  "performance_ratio": 6.510268694120382,
+  "keep_indices": [
+    1,
+    5,
+    11,
+    13
+  ]
+}

@@ -15,6 +15,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from function_encoder.model.mlp import MLP
 from function_encoder.function_encoder import BasisFunctions, FunctionEncoder
 from function_encoder.utils.training import train_step
+from function_encoder.inner_products import standard_inner_product
+from function_encoder.utils.experiment_saver import ExperimentSaver, create_visualization_data_polynomial
 
 
 class TrainPruneAnalyzer:
@@ -102,7 +104,7 @@ class TrainPruneAnalyzer:
                                eigenvalues: np.ndarray,
                                eigenvectors: np.ndarray,
                                explained_variance_ratio: np.ndarray,
-                               basis_funcs: np.ndarray,
+                               basis_funcs: BasisFunctions,
                                variance_threshold: float = 0.99) -> List[int]:
         """Identify which basis functions to keep based on PCA analysis."""
         
@@ -135,10 +137,49 @@ class TrainPruneAnalyzer:
         #             important_pcs[:, j],      # PC j (column)
         #             eigenvectors[i,:]        # basis i (column)
         #         )
-        
+    
         # best_aligned_basis = np.argmax(basis_alignment, axis=0)
 
-        # ================= Method 3: PC Components loadings =============
+        # # ============= Parse eigenvecs into model forward then compare with basis funcs (X) ============
+        # # Use eigenvectors as coefficients and compute cosine similarity with basis functions on X
+        # if X is None:
+        #     X = torch.linspace(-1, 1, 100).unsqueeze(0).unsqueeze(2).to(self.device)
+
+        # basis_alignment = np.zeros((n_basis, n_components))
+
+        # # Evaluate individual basis functions on X
+        # with torch.no_grad():
+        #     basis_evals = basis_funcs(X)  # Shape: [batch, n_points, n_features, n_basis]
+        
+        # for j in range(n_components):
+        #     # Use PC j as coefficients and pass through model.forward to reconstruct the PC function
+        #     pc_coeffs = torch.tensor(important_pcs[:, j], dtype=torch.float32, device=self.device)
+        #     pc_coeffs = pc_coeffs.unsqueeze(0)  # Shape: [1, n_basis] for batch dimension
+
+        #     # Reconstruct PC function using model.forward
+        #     with torch.no_grad():
+        #         pc_reconstruction = model.forward(X, pc_coeffs)  # [batch, n_points, n_features]
+            
+        #     # Compute function space inner product alignment with each basis function
+        #     for i in range(n_basis):
+        #         basis_i = basis_evals[:, :, :, i]  # [batch, n_points, n_features]
+
+        #         # Add function dimension for inner product computation
+        #         pc_4d = pc_reconstruction.unsqueeze(-1)  # [batch, n_points, n_features, 1]
+        #         basis_4d = basis_i.unsqueeze(-1)  # [batch, n_points, n_features, 1]
+
+        #         # Use proper function space inner product
+        #         inner_prod = standard_inner_product(pc_4d, basis_4d)  # [batch, 1, 1]
+        #         alignment = inner_prod / (torch.norm(pc_4d, dim=(1,2), keepdim=True) * torch.norm(basis_4d, dim=(1,2), keepdim=True) + 1e-8)
+        #         # Take mean across batch and extract scalar
+        #         basis_alignment[i, j] = alignment.mean().item()
+
+        # print("Basis alignment:", basis_alignment)
+        # # alignment_abs = np.abs(basis_alignment)
+        # alignment_abs = basis_alignment
+        # best_aligned_basis = np.argmax(alignment_abs, axis=0)
+
+        # ================= Method 3: PC Components loadings (commented out - using new method above) =============
         # basis_alignment = important_pcs                                            # (n_basis, k)
         # alignment_abs = np.abs(basis_alignment)
         # best_aligned_basis = np.argmax(alignment_abs, axis=0)
@@ -278,7 +319,20 @@ class TrainPruneAnalyzer:
                          comparison_results: dict,
                          dataset: PolynomialDataset):
         """Visualize the pruning results."""
-        
+
+        # Publication formatting
+        plt.rcParams.update({
+            'font.size': 8,
+            'figure.dpi': 300,
+            'savefig.dpi': 300,
+            'savefig.format': 'png',
+            'lines.markersize': 3,
+            'legend.fontsize': 6,
+            'legend.handlelength': 1.0,
+            'legend.handletextpad': 0.3,
+            'legend.columnspacing': 0.5
+        })
+
         fig, axes = plt.subplots(2, 3, figsize=(15, 10))
         
         # 1. Eigenvalue spectrum
@@ -287,7 +341,6 @@ class TrainPruneAnalyzer:
         ax.axvline(x=len(keep_indices)-1, color='r', linestyle='--', label=f'Cutoff (n={len(keep_indices)})')
         ax.set_xlabel('Component')
         ax.set_ylabel('Eigenvalue')
-        ax.set_title('PCA Eigenvalue Spectrum')
         ax.legend()
         ax.grid(True)
         
@@ -299,7 +352,6 @@ class TrainPruneAnalyzer:
         ax.axvline(x=len(keep_indices)-1, color='r', linestyle='--')
         ax.set_xlabel('Number of Components')
         ax.set_ylabel('Cumulative Explained Variance')
-        ax.set_title('Cumulative Variance Explained')
         ax.legend()
         ax.grid(True)
         
@@ -311,7 +363,6 @@ class TrainPruneAnalyzer:
         ax.bar(basis_indices, np.ones(n_basis), color=colors)
         ax.set_xlabel('Basis Function Index')
         ax.set_ylabel('Selected')
-        ax.set_title('Selected Basis Functions (Red = Kept)')
         
         # 4. Function approximation comparison
         ax = axes[1, 0]
@@ -344,7 +395,6 @@ class TrainPruneAnalyzer:
         ax.scatter(example_X[0].cpu(), example_y[0].cpu(), c='red', s=20, zorder=5, alpha=0.5, label='Example Points')
         ax.set_xlabel('x')
         ax.set_ylabel('y')
-        ax.set_title('Function Approximation Comparison')
         ax.legend()
         
         # 5. Coefficient comparison
@@ -364,7 +414,6 @@ class TrainPruneAnalyzer:
         
         ax.set_xlabel('Basis Index')
         ax.set_ylabel('Coefficient Value')
-        ax.set_title('Coefficient Comparison')
         ax.legend()
         
         # 6. Performance summary
@@ -392,6 +441,7 @@ Performance ratio: {comparison_results['mse_pruned_refined']/comparison_results[
                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
         
         plt.tight_layout()
+        plt.savefig('plots/polynomial_prune_analysis.png', dpi=300, bbox_inches='tight')
         plt.show()
 
 
@@ -428,13 +478,68 @@ if __name__ == "__main__":
     comparison_results = analyzer.compare_models(full_model, pruned_model, pruned_model_refined, dataset)
     
     # Step 7: Visualize results
-    analyzer.visualize_results(full_model, pruned_model, pruned_model_refined, eigenvalues, explained_var, 
+    analyzer.visualize_results(full_model, pruned_model, pruned_model_refined, eigenvalues, explained_var,
                               keep_indices, comparison_results, dataset)
+
+    # Step 8: Save experiment data
+    saver = ExperimentSaver()
+
+    # Get variables from the visualization (they exist in the visualize_results method)
+    # We need to recreate them here for saving
+    test_sample = next(iter(DataLoader(dataset, batch_size=1)))
+    X, y, example_X, example_y = test_sample
+    idx = torch.argsort(X[0,:,0])
+    X_sorted = X[0,:,0][idx].cpu().numpy()
+    y_sorted = y[0,:,0][idx].cpu().numpy()
+
+    # Get predictions for visualization
+    with torch.no_grad():
+        coeffs_orig, _ = full_model.compute_coefficients(example_X.to(analyzer.device), example_y.to(analyzer.device))
+        y_pred_orig = full_model(X.to(analyzer.device), coeffs_orig)[0,:,0][idx].cpu().numpy()
+
+    # Prepare visualization data
+    viz_data = create_visualization_data_polynomial(
+        X_sorted=X_sorted,
+        y_sorted=y_sorted,
+        y_pred=y_pred_orig,
+        example_X=example_X[0].cpu().numpy(),
+        example_y=example_y[0].cpu().numpy()
+    )
+
+    # Prepare and save experiment data
+    experiment_data = saver.prepare_prune_data(
+        problem_type="polynomial",
+        num_basis_original=len(full_model.basis_functions.basis_functions),
+        num_basis_pruned=len(pruned_model_refined.basis_functions.basis_functions),
+        train_losses=train_losses,
+        finetune_losses=finetune_losses,
+        eigenvalues=eigenvalues,
+        eigenvectors=eigenvectors,
+        explained_variance_ratio=explained_var,
+        keep_indices=keep_indices,
+        comparison_results=comparison_results,
+        visualization_data=viz_data,
+        dataset_params={
+            "name": "poly_degree3",
+            "n_points": n_points,
+            "n_example_points": 100,
+            "degree": 3
+        },
+        training_params={
+            "num_epochs_initial": 2000,
+            "num_epochs_finetune": 500,
+            "learning_rate": 1e-3,
+            "batch_size": 50
+        }
+    )
+
+    saver.save_experiment("polynomial", "train_then_prune", experiment_data, dataset_name="poly_degree3")
     
     # Additional analysis: Show individual basis functions
-    fig, axes = plt.subplots(2, max(num_basis//2, len(keep_indices)), figsize=(15, 6))
+    fig, axes = plt.subplots(2, max(num_basis//2, len(keep_indices)), figsize=(15, 6),
+                            sharex=True, sharey=True)
     X_plot = torch.linspace(-1, 1, 100).unsqueeze(0).unsqueeze(2).to(analyzer.device)
-    
+
     # Original basis functions
     for i in range(num_basis):
         ax = axes[0, i % (num_basis//2)]
@@ -442,24 +547,32 @@ if __name__ == "__main__":
             basis_output = full_model.basis_functions.basis_functions[i](X_plot)
         color = 'red' if i in keep_indices else 'blue'
         ax.plot(X_plot[0, :, 0].cpu(), basis_output[0, :, 0].cpu(), color=color)
-        ax.set_title(f"Original φ_{i+1}")
         ax.set_ylim(-2, 2)
-    
+        ax.annotate(f"φ{i+1}", xy=(0.05, 0.95), xycoords='axes fraction', fontsize=8)
+
     # Pruned basis functions
     for i, basis_fn in enumerate(pruned_model.basis_functions.basis_functions):
         ax = axes[1, i]
         with torch.no_grad():
             basis_output = basis_fn(X_plot)
         ax.plot(X_plot[0, :, 0].cpu(), basis_output[0, :, 0].cpu(), 'green')
-        ax.set_title(f"Pruned φ_{i+1} (was {keep_indices[i]+1})")
         ax.set_ylim(-2, 2)
-    
+        ax.annotate(f"φ{i+1}", xy=(0.05, 0.95), xycoords='axes fraction', fontsize=8)
+
     # Clear unused subplots
     for i in range(len(pruned_model.basis_functions.basis_functions), axes.shape[1]):
         axes[1, i].axis('off')
-    
-    plt.suptitle('Basis Functions: Original (red=kept, blue=pruned) vs Pruned (green)')
+
+    # Shared labels
+    fig.text(0.5, 0.04, 'x', ha='center', fontsize=8)
+    fig.text(0.04, 0.5, 'φ(x)', va='center', rotation='vertical', fontsize=8)
+
+    # Add shared legend outside plots
+    fig.legend(['Kept', 'Pruned', 'Final'],
+               loc='outside right upper', bbox_to_anchor=(1.02, 1))
+
     plt.tight_layout()
+    plt.savefig('plots/polynomial_basis_functions.png', dpi=300, bbox_inches='tight')
     plt.show()
 
     # os.makedirs('results', exist_ok=True)

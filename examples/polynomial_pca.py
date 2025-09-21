@@ -10,6 +10,7 @@ from function_encoder.model.mlp import MLP
 from function_encoder.function_encoder import BasisFunctions, FunctionEncoder
 from function_encoder.losses import basis_normalization_loss
 from function_encoder.utils.training import train_step
+from function_encoder.utils.experiment_saver import ExperimentSaver, create_visualization_data_polynomial
 
 
 import tqdm
@@ -25,7 +26,7 @@ else:
 torch.manual_seed(42)
 
 # Load dataset
-dataset = Dataset(n_points=100, n_example_points=100, degree=3)
+dataset = PolynomialDataset(n_points=100, n_example_points=100, degree=3)
 dataloader = DataLoader(dataset, batch_size=50)
 dataloader_iter = iter(dataloader)
 
@@ -96,7 +97,7 @@ with tqdm.tqdm(range(num_epochs), desc=f"basis 1/{num_basis}") as tqdm_bar:
     for epoch in tqdm_bar:
         batch = next(dataloader_iter)
         loss = train_step(model, optimizer, batch, loss_function)
-        losses.append(loss[-1])  # Only the final loss
+        losses.append(loss)  # Only the final loss
         tqdm_bar.set_postfix({"loss": f"{loss:.2e}"})
 
 
@@ -140,6 +141,19 @@ for k in range(num_basis - 1):
 
 import matplotlib.pyplot as plt
 
+# Publication formatting
+plt.rcParams.update({
+    'font.size': 8,
+    'figure.dpi': 300,
+    'savefig.dpi': 300,
+    'savefig.format': 'png',
+    'lines.markersize': 3,
+    'legend.fontsize': 8,
+    'legend.handlelength': 1.0,
+    'legend.handletextpad': 0.3,
+    'legend.columnspacing': 0.5
+})
+
 model.eval()
 with torch.no_grad():
     dataloader_eval = DataLoader(dataset, batch_size=1)
@@ -170,11 +184,15 @@ with torch.no_grad():
     ax.plot(X, y, label="True")
     ax.plot(X, y_pred, label="Predicted")
     ax.scatter(example_X, example_y, label="Data", color="red")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
     ax.legend()
+    plt.tight_layout()
+    plt.savefig('plots/poly_func.png', dpi=300, bbox_inches='tight')
     plt.show()
 
     # Visualize individual basis functions
-    fig, axes = plt.subplots(2, 4, figsize=(12, 6))
+    fig, axes = plt.subplots(2, 4,figsize=(6, 3))
     axes = axes.flatten()
     X_plot = torch.linspace(-1, 1, 100).unsqueeze(1).unsqueeze(0).to(device)
     for i, basis_fn in enumerate(model.basis_functions.basis_functions):
@@ -182,15 +200,20 @@ with torch.no_grad():
             break
         basis_output = basis_fn(X_plot)
         axes[i].plot(X_plot[0].cpu().numpy(), basis_output[0].detach().cpu().numpy())
-        axes[i].set_title(f"Basis Function {i+1}")
+        axes[i].set_title(f"φ{i+1}")
+        axes[i].set_xlabel('x')
+        axes[i].set_ylabel('φ(x)')
+
     plt.tight_layout()
+    plt.savefig('plots/poly_basis.png', dpi=300, bbox_inches='tight')
     plt.show()
 
     # Plot loss and explained variance
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(9, 3))
 
     # Plot loss
     ax1.plot(losses)
+    ax1.set_xlabel("Epoch")
     ax1.set_ylabel("MSE")
     ax1.grid(True)
     ax1.set_yscale("log")
@@ -202,6 +225,7 @@ with torch.no_grad():
             range(1, len(scores[i]) + 1),
             scores[i],
             marker="o",
+            markersize=3,
             label=f"k = {i + 1}",
         )
     ax2.set_xlabel("Eigenvalue Index")
@@ -219,12 +243,14 @@ with torch.no_grad():
         range(1, len(eigenvalues) + 1),
         eigenvalues,
         marker="o",
+        markersize=3,
         label="Covariance Matrix",
     )
     ax3.plot(
         range(1, len(gram_eigenvalues) + 1),
         gram_eigenvalues,
         marker="o",
+        markersize=3,
         label="Gram Matrix",
     )
     ax3.set_xlabel("Eigenvalue Index")
@@ -234,4 +260,43 @@ with torch.no_grad():
     ax3.grid(True)
 
     plt.tight_layout()
+    plt.savefig('plots/poly_progressive_unsize.png', dpi=300, bbox_inches='tight')
     plt.show()
+
+# Save experiment data
+saver = ExperimentSaver()
+
+# Prepare visualization data
+viz_data = create_visualization_data_polynomial(
+    X_sorted=X,
+    y_sorted=y,
+    y_pred=y_pred,
+    example_X=example_X,
+    example_y=example_y,
+    basis_outputs=[basis_fn(X_plot)[0].detach().cpu().numpy()
+                   for basis_fn in model.basis_functions.basis_functions]
+)
+
+# Prepare and save experiment data
+experiment_data = saver.prepare_progressive_data(
+    problem_type="polynomial",
+    num_basis=num_basis,
+    losses=losses,
+    scores=scores,
+    eigenvalues=eigenvalues,
+    gram_eigenvalues=gram_eigenvalues,
+    visualization_data=viz_data,
+    dataset_params={
+        "name": "poly_degree3",
+        "n_points": 100,
+        "n_example_points": 100,
+        "degree": 3
+    },
+    training_params={
+        "num_epochs": num_epochs,
+        "learning_rate": 1e-3,
+        "batch_size": 50
+    }
+)
+
+saver.save_experiment("polynomial", "progressive", experiment_data, dataset_name="polynomial_d3")

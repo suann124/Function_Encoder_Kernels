@@ -1,0 +1,13 @@
+{
+  "problem_type": "kepler",
+  "method": "train_then_prune",
+  "num_basis_original": 5,
+  "num_basis_pruned": 3,
+  "compression_ratio": 0.6,
+  "performance_ratio": 1.0337093417400758,
+  "keep_indices": [
+    1,
+    2,
+    4
+  ]
+}

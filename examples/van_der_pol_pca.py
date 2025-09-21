@@ -6,11 +6,15 @@ from torch.utils.data import DataLoader
 
 from my_datasets.van_der_pol import VanDerPolDataset, van_der_pol
 
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from function_encoder.model.mlp import MLP
 from function_encoder.model.neural_ode import NeuralODE, ODEFunc, rk4_step
 from function_encoder.function_encoder import BasisFunctions, FunctionEncoder
 from function_encoder.losses import residual_loss
 from function_encoder.utils.training import train_step
+from function_encoder.utils.experiment_saver import ExperimentSaver, create_visualization_data_dynamics
 
 import tqdm
 
@@ -26,7 +30,7 @@ torch.manual_seed(42)
 # Load dataset
 
 dataset = VanDerPolDataset(
-    # integrator=rk4_step, 
+    integrator=rk4_step, 
     n_points=1000, n_example_points=100, dt_range=(0.1, 0.1)
 )
 dataloader = DataLoader(dataset, batch_size=50)
@@ -279,3 +283,82 @@ with torch.no_grad():
 
     plt.tight_layout()
     plt.show()
+
+# Save experiment data
+saver = ExperimentSaver()
+
+# Prepare visualization data for dynamics
+trajectories_true = []
+trajectories_pred = []
+initial_conditions = []
+system_params = []
+
+# Extract trajectory data from the plotting section above
+for i in range(3):
+    for j in range(3):
+        idx = i * 3 + j
+        if idx < len(mu):
+            # We need to regenerate the trajectories for saving (following the plotting code)
+            _mu = mu[idx]
+            _y0 = torch.empty(1, 2, device=device).uniform_(*dataloader.dataset.y0_range)
+            _c = coefficients[idx].unsqueeze(0)
+            s = 0.1
+            n = int(10 / s)
+            _dt = torch.tensor([s], device=device)
+
+            # True trajectory
+            x = _y0.clone()
+            y_true = [x]
+            for k in range(n):
+                x = rk4_step(van_der_pol, x, _dt, mu=_mu) + x
+                y_true.append(x)
+            y_true = torch.cat(y_true, dim=0).detach().cpu().numpy()
+
+            # Predicted trajectory
+            x = _y0.clone()
+            x = x.unsqueeze(1)
+            _dt = _dt.unsqueeze(0)
+            pred = [x]
+            for k in range(n):
+                x = model((x, _dt), coefficients=_c) + x
+                pred.append(x)
+            pred = torch.cat(pred, dim=1)[0].detach().cpu().numpy()
+
+            trajectories_true.append(y_true)
+            trajectories_pred.append(pred)
+            initial_conditions.append(_y0[0].cpu().numpy())
+            system_params.append(_mu.item())
+
+viz_data = create_visualization_data_dynamics(
+    trajectories_true=trajectories_true,
+    trajectories_pred=trajectories_pred,
+    initial_conditions=initial_conditions,
+    system_params=system_params
+)
+
+# Prepare and save experiment data
+experiment_data = saver.prepare_progressive_data(
+    problem_type="van_der_pol",
+    num_basis=num_basis,
+    losses=losses,
+    scores=scores,
+    eigenvalues=eigenvalues,
+    gram_eigenvalues=gram_eigenvalues,
+    visualization_data=viz_data,
+    dataset_params={
+        "name": "vanderpol_dt01",
+        "n_points": 1000,
+        "n_example_points": 100,
+        "dt_range": (0.1, 0.1)
+    },
+    training_params={
+        "num_epochs": num_epochs,
+        "learning_rate": 1e-3,
+        "batch_size": 50
+    }
+)
+
+# Add scores separately (due to varying sizes)
+experiment_data["scores"] = scores
+
+saver.save_experiment("van_der_pol", "progressive", experiment_data, dataset_name="vanderpol_dt01")

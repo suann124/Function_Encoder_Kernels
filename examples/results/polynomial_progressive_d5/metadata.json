@@ -1,0 +1,18 @@
+{
+  "problem_type": "polynomial",
+  "method": "progressive",
+  "dataset_name": "polynomial_d5",
+  "timestamp": "20250921_003219",
+  "num_basis": 10,
+  "dataset_params": {
+    "name": "polynomial_d5",
+    "degree": 5,
+    "n_points": 100,
+    "n_example_points": 100
+  },
+  "training_params": {
+    "num_epochs": 1000,
+    "learning_rate": 0.001,
+    "batch_size": 50
+  }
+}
