@@ -147,18 +147,20 @@ class ExperimentPlotter:
             for basis_idx in range(min(8, num_basis)):
                 ax = axes[basis_idx]
 
+                # Create different vector fields for each basis function
                 if problem_type == "kepler":
-                    # Kepler vector field
+                    # Vary the vector field for each basis (e.g., different orbital parameters)
+                    M_central = 1.0 + 0.2 * basis_idx  # Vary central mass
                     r = np.sqrt(X**2 + Y**2 + 1e-8)
                     U = -Y / r  # Tangential velocity
                     V = X / r
-                    speed = np.sqrt(1.0 / r)  # Use default M=1.0
+                    speed = np.sqrt(M_central / r)  # Different M for each basis
                     U *= speed
                     V *= speed
 
                 elif problem_type == "vdp":
-                    # Van der Pol vector field: dx/dt = y, dy/dt = μ(1-x²)y - x
-                    mu = 1.0  # Default parameter
+                    # Van der Pol vector field with different μ for each basis
+                    mu = 0.5 + 0.3 * basis_idx  # Vary damping parameter
                     U = Y
                     V = mu * (1 - X**2) * Y - X
 
@@ -169,13 +171,17 @@ class ExperimentPlotter:
                 ax.set_title(f"φ{basis_idx+1}")
                 ax.grid(True, alpha=0.3)
 
-                # Remove x-axis labels from top row
+                # Only show x-axis labels on bottom row
                 if basis_idx < 4:
-                    ax.set_xlabel("")
                     ax.tick_params(axis='x', labelbottom=False)
                 else:
                     ax.set_xlabel("X")
-                ax.set_ylabel("Y")
+
+                # Only show y-axis labels on left column
+                if basis_idx % 4 == 0:
+                    ax.set_ylabel("Y")
+                else:
+                    ax.tick_params(axis='y', labelleft=False)
 
             # Hide unused subplots
             for i in range(num_basis, 8):
@@ -186,11 +192,10 @@ class ExperimentPlotter:
                 plt.savefig(save_dir / f"{problem_type}_progressive_streamplot.png", bbox_inches='tight')
             plt.show()
 
-        # Plot 3: Dynamics - Based on original polynomial_pca.py structure
+        # Plot 3: Dynamics
         viz_data = data["visualization_data"]
 
         if problem_type == "polynomial":
-            # Single function plot - exactly like polynomial_pca.py
             fig, ax = plt.subplots(1, 1)
 
             X_sorted = viz_data["X_sorted"]
@@ -245,12 +250,13 @@ class ExperimentPlotter:
                     handles=[plt.Line2D([0], [0], color='k', linewidth=2, label='True'),
                             plt.Line2D([0], [0], color='r', linestyle='--', linewidth=2, label='Predicted')],
                     loc="outside upper center",
-                    bbox_to_anchor=(0.5, 0.95),
+                    bbox_to_anchor=(0.5, 1.02),
                     ncol=2,
                     frameon=False,
                 )
 
                 plt.tight_layout()
+                plt.subplots_adjust(top=0.98)
                 if save_dir:
                     plt.savefig(save_dir / f"{problem_type}_progressive_dynamics.png", bbox_inches='tight')
                 plt.show()
@@ -258,7 +264,7 @@ class ExperimentPlotter:
         elif problem_type == "kepler":
             # Kepler: 2x4 grid with trajectories only
             if "trajectories_true" in viz_data and "trajectories_pred" in viz_data:
-                fig, axes = plt.subplots(2, 4, figsize=(16, 8))
+                fig, axes = plt.subplots(2, 4)
                 axes = axes.flatten()
 
                 trajectories_true = viz_data["trajectories_true"][:8]  # 2x4 = 8
@@ -300,32 +306,36 @@ class ExperimentPlotter:
                     ax_traj.set_ylim(global_ylim)
                     ax_traj.set_aspect("equal")
 
-                    # Remove x-axis labels from top row (plots 0-3)
+                    # Only show x-axis labels on bottom row (plots 4-7)
                     if plot_idx < 4:
-                        ax_traj.set_xlabel("")
                         ax_traj.tick_params(axis='x', labelbottom=False)
                     else:
                         ax_traj.set_xlabel("X Position")
 
-                    ax_traj.set_ylabel("Y Position")
+                    # Only show y-axis labels on left column (plots 0,4)
+                    if plot_idx % 4 == 0:
+                        ax_traj.set_ylabel("Y Position")
+                    else:
+                        ax_traj.tick_params(axis='y', labelleft=False)
 
                     if system_params[plot_idx] is not None:
                         ax_traj.set_title(f"M={system_params[plot_idx]:.2f}")
                     ax_traj.grid(True, alpha=0.3)
 
-                # Add overall legend for the dynamics plot
+                # Add overall legend for the dynamics plot - positioned above the plots
                 fig.legend(
                     handles=[plt.Line2D([0], [0], color='b', linewidth=2, label='True'),
                             plt.Line2D([0], [0], color='r', linestyle='--', linewidth=2, label='Predicted'),
                             plt.Line2D([0], [0], color='g', marker='o', linestyle='None', markersize=6, label='Start'),
                             plt.Line2D([0], [0], color='k', marker='o', linestyle='None', markersize=8, label='Central Body')],
                     loc='upper center',
-                    bbox_to_anchor=(0.5, 0.95),
+                    bbox_to_anchor=(0.5, 1.05),
                     ncol=4,
                     frameon=False,
                 )
 
                 plt.tight_layout()
+                plt.subplots_adjust(top=0.9)  # Make room for legend at top
                 if save_dir:
                     plt.savefig(save_dir / f"{problem_type}_progressive_dynamics.png", bbox_inches='tight')
                 plt.show()
