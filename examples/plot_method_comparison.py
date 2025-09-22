@@ -80,21 +80,33 @@ def main():
     print(f"  Progressive: {progressive_path.name}")
     print(f"  Train-then-prune: {prune_path.name}")
 
-    # Create comparison plot
+    # Create comparison plots
     try:
-        # Determine filename
+        # Determine filenames
         if args.save_as:
-            filename = f"{args.save_as}.png"
+            eig_filename = f"{args.save_as}.png"
+            cumvar_filename = f"{args.save_as}_cumvar.png"
         else:
-            filename = "Eig_spectrum_comparison.png"
+            eig_filename = "Eig_spectrum_comparison.png"
+            cumvar_filename = "cumulative_variance_comparison.png"
 
+        # Create eigenvalue spectrum comparison
         plotter.plot_method_comparison(
             progressive_path=progressive_path,
             prune_path=prune_path,
             save_dir=args.save_dir,
-            custom_filename=filename
+            custom_filename=eig_filename
         )
-        print(f"✅ Method comparison plot created successfully! Saved to: {args.save_dir}/{filename}")
+        print(f"✅ Eigenvalue spectrum comparison plot created! Saved to: {args.save_dir}/{eig_filename}")
+
+        # Create cumulative variance comparison
+        plotter.plot_cumulative_variance_comparison(
+            progressive_path=progressive_path,
+            prune_path=prune_path,
+            save_dir=args.save_dir,
+            custom_filename=cumvar_filename
+        )
+        print(f"✅ Cumulative variance comparison plot created! Saved to: {args.save_dir}/{cumvar_filename}")
 
     except Exception as e:
         print(f"❌ Error during plotting: {e}")

@@ -459,8 +459,7 @@ class ExperimentPlotter:
         """
         Plot comparison between progressive and train-then-prune methods.
 
-        Creates a 1x2 plot showing eigenvalue spectra (explained variance ratios) side by side,
-        matching the format of ax2 in kepler_pca.py.
+        Creates a 1x2 plot showing eigenvalue spectra (explained variance ratios) side by side.
         """
 
         # Load experiment data
@@ -473,7 +472,10 @@ class ExperimentPlotter:
 
         fig, axes = plt.subplots(1, 2, figsize=(5.5, 3))
 
-        # Progressive method (left plot) - show explained variance progression like ax2 in kepler_pca.py
+        # Collect data for consistent y-axis scaling
+        all_eigenvalues = []
+
+        # Progressive method (left plot)
         ax = axes[0]
 
         # Reconstruct scores from progressive data
@@ -492,7 +494,21 @@ class ExperimentPlotter:
             # Convert to numpy if it's a tensor
             if hasattr(final_scores, 'cpu'):
                 final_scores = final_scores.cpu().numpy()
+            all_eigenvalues.extend(final_scores)
 
+        # Train-then-prune method data
+        if "explained_variance_ratio" in data_prune["pca_data"]:
+            explained_var = data_prune["pca_data"]["explained_variance_ratio"]
+            all_eigenvalues.extend(explained_var)
+
+        # Set consistent y-limits
+        if all_eigenvalues:
+            eigen_ylim = [min(all_eigenvalues) * 0.9, max(all_eigenvalues) * 1.1]
+        else:
+            eigen_ylim = [1e-6, 1]
+
+        # Plot progressive method
+        if progressive_scores:
             ax.plot(
                 range(1, len(final_scores) + 1),
                 final_scores,
@@ -504,17 +520,20 @@ class ExperimentPlotter:
             ax.set_xlabel("Eigenvalue Index")
             ax.set_ylabel("Explained Variance Ratio")
             ax.set_yscale("log")
+            ax.set_ylim(eigen_ylim)
             ax.grid(True)
             print(f"Progressive: Found {len(progressive_scores)} stages")
         else:
             ax.text(0.5, 0.5, 'No progressive scores available',
                    ha='center', va='center', transform=ax.transAxes)
+            ax.set_xlabel("Eigenvalue Index")
+            ax.set_ylabel("Explained Variance Ratio")
+            ax.set_ylim(eigen_ylim)
 
-        # Train-then-prune method (right plot) - show final eigenvalue spectrum
+        # Train-then-prune method (right plot)
         ax = axes[1]
 
         if "explained_variance_ratio" in data_prune["pca_data"]:
-            explained_var = data_prune["pca_data"]["explained_variance_ratio"]
             ax.plot(
                 range(1, len(explained_var) + 1),
                 explained_var,
@@ -525,25 +544,156 @@ class ExperimentPlotter:
             ax.set_xlabel("Eigenvalue Index")
             ax.tick_params(axis='y', left=False, labelleft=False)  # Remove y-axis labels for right plot
             ax.set_yscale("log")
+            ax.set_ylim(eigen_ylim)
             ax.grid(True)
             print(f"Train-then-prune: {len(explained_var)} components")
         else:
             ax.text(0.5, 0.5, 'No eigenvalue data available',
                    ha='center', va='center', transform=ax.transAxes)
-
-        # # Add legend outside the subplots if there are labels
-        # handles_labels = []
-        # for ax in axes:
-        #     h, l = ax.get_legend_handles_labels()
-        #     handles_labels.extend(list(zip(h, l)))
-
-        # if handles_labels:
-        #     handles, labels = zip(*handles_labels)
-        #     fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 0.95), ncol=len(labels), frameon=False)
+            ax.set_xlabel("Eigenvalue Index")
+            ax.tick_params(axis='y', left=False, labelleft=False)
+            ax.set_ylim(eigen_ylim)
 
         plt.tight_layout()
         if save_dir:
             filename = custom_filename if custom_filename else "Eig_spectrum_comparison.png"
+            plt.savefig(save_dir / filename, bbox_inches='tight', dpi=300)
+        plt.show()
+
+    def plot_cumulative_variance_comparison(self, progressive_path: Union[str, Path],
+                                          prune_path: Union[str, Path],
+                                          save_dir: Optional[str] = None,
+                                          custom_filename: Optional[str] = None):
+        """
+        Plot comparison of cumulative variance between progressive and train-then-prune methods.
+
+        Creates a 1x2 plot showing cumulative explained variance side by side.
+        """
+
+        # Load experiment data
+        data_progressive = self.saver.load_experiment(progressive_path)
+        data_prune = self.saver.load_experiment(prune_path)
+
+        if save_dir:
+            save_dir = Path(save_dir)
+            save_dir.mkdir(exist_ok=True)
+
+        fig, axes = plt.subplots(1, 2, figsize=(5.5, 3))
+
+        # Collect data for consistent y-axis scaling
+        all_cumsum_vars = []
+        progressive_cumsum_var = None
+        prune_cumsum_var = None
+        progressive_cutoff_idx = None
+        prune_cutoff_idx = None
+
+        # Progressive method (left plot)
+        ax = axes[0]
+
+        # Reconstruct scores from progressive data
+        progressive_scores = []
+        pca_data = data_progressive["pca_data"]
+        if "num_scores" in pca_data:
+            num_scores = pca_data["num_scores"]
+            for i in range(num_scores):
+                score_key = f"score_{i}"
+                if score_key in pca_data:
+                    progressive_scores.append(pca_data[score_key])
+
+        if progressive_scores:
+            # Use the final (max basis) eigenvalue spectrum for cumulative variance
+            final_scores = progressive_scores[-1]
+            # Convert to numpy if it's a tensor
+            if hasattr(final_scores, 'cpu'):
+                final_scores = final_scores.cpu().numpy()
+
+            progressive_cumsum_var = np.cumsum(final_scores)
+            all_cumsum_vars.append(progressive_cumsum_var)
+
+            # Find cutoff at 99% threshold intersection
+            progressive_cutoff_idx = np.where(progressive_cumsum_var >= 0.99)[0]
+            if len(progressive_cutoff_idx) > 0:
+                progressive_cutoff_idx = progressive_cutoff_idx[0]
+            else:
+                progressive_cutoff_idx = None
+
+        # Train-then-prune method data collection
+        if "explained_variance_ratio" in data_prune["pca_data"]:
+            explained_var = data_prune["pca_data"]["explained_variance_ratio"]
+            prune_cumsum_var = np.cumsum(explained_var)
+            all_cumsum_vars.append(prune_cumsum_var)
+            keep_indices = data_prune["pca_data"].get("keep_indices", None)
+            if keep_indices is not None:
+                prune_cutoff_idx = len(keep_indices) - 1
+
+        # Determine y-axis limits for consistency
+        if all_cumsum_vars:
+            y_max = max(np.max(cv) for cv in all_cumsum_vars)
+            y_min = min(np.min(cv) for cv in all_cumsum_vars)
+            y_margin = 0.05 * (y_max - y_min)
+            ylim = [max(0, y_min - y_margin), min(1.05, y_max + y_margin)]
+        else:
+            ylim = [0, 1.05]
+
+        # Plot progressive method
+        if progressive_scores and progressive_cumsum_var is not None:
+            ax.plot(progressive_cumsum_var, 'b.-', color='blue')
+            ax.axhline(y=0.99, color='r', linestyle='--')
+
+            # Add cutoff line at 99% threshold intersection
+            if progressive_cutoff_idx is not None:
+                ax.axvline(x=progressive_cutoff_idx, color='r', linestyle='--', alpha=0.7)
+
+            ax.set_xlabel("Number of Components")
+            ax.set_ylabel("Cumulative Explained Variance")
+            ax.set_ylim(ylim)
+            ax.grid(True)
+        else:
+            ax.text(0.5, 0.5, 'No progressive scores available',
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_ylim(ylim)
+
+        # Train-then-prune method (right plot)
+        ax = axes[1]
+
+        if prune_cumsum_var is not None:
+            ax.plot(prune_cumsum_var, 'r.-', color='red')
+            ax.axhline(y=0.99, color='r', linestyle='--')
+            if prune_cutoff_idx is not None:
+                ax.axvline(x=prune_cutoff_idx, color='r', linestyle='--', alpha=0.7)
+            ax.set_xlabel("Number of Components")
+            ax.tick_params(axis='y', left=False, labelleft=False)  # Remove y-axis labels for right plot
+            ax.set_ylim(ylim)
+            ax.grid(True)
+        else:
+            ax.text(0.5, 0.5, 'No variance data available',
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_ylim(ylim)
+
+        # Create shared legend outside the subplots
+        handles = []
+        labels = []
+
+        # Add common legend elements
+        handles.append(plt.Line2D([0], [0], color='r', linestyle='--', label='99% threshold'))
+        labels.append('99% threshold')
+
+        # Add cutoff line legend if there's a cutoff shown in either plot
+        has_cutoff = False
+        if progressive_cutoff_idx is not None or prune_cutoff_idx is not None:
+            has_cutoff = True
+
+        if has_cutoff:
+            handles.append(plt.Line2D([0], [0], color='r', linestyle='--', alpha=0.7, label='Cutoff'))
+            labels.append('Cutoff')
+
+        if handles:
+            fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.08), ncol=len(labels), frameon=False)
+
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.85)  # Make room for legend at top
+        if save_dir:
+            filename = custom_filename if custom_filename else "cumulative_variance_comparison.png"
             plt.savefig(save_dir / filename, bbox_inches='tight', dpi=300)
         plt.show()
 

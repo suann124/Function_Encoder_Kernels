@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data import DataLoader
+import numpy as np
 
 from my_datasets.kepler import KeplerDataset, kepler
 
@@ -58,6 +59,7 @@ losses = []  # For plotting
 scores = []  # For plotting
 dataloader_coeffs = DataLoader(dataset, batch_size=50)
 dataloader_coeffs_iter = iter(dataloader_coeffs)
+variance_99_achieved = False  # Track if 99% variance has been achieved
 
 
 def compute_explained_variance(model):
@@ -113,6 +115,22 @@ with torch.no_grad():
     explained_variance_ratio, *_ = compute_explained_variance(model)
     scores.append(explained_variance_ratio)
 
+    # Detect elbow in scree plot (find where explained variance drops significantly)
+    # Need at least 4-5 points for reliable elbow detection
+    if len(explained_variance_ratio) >= 4 and not variance_99_achieved:
+        var_ratios = explained_variance_ratio.cpu().numpy()
+        # Calculate second derivative to find the elbow
+        diffs = np.diff(var_ratios)
+        second_diffs = np.diff(diffs)
+
+        # Find elbow as the point where second derivative is maximum (most curvature)
+        elbow_idx = np.argmax(np.abs(second_diffs)) + 2  # +2 because of double diff
+
+        # Only report if the elbow is meaningful (not at the very end)
+        if elbow_idx < len(var_ratios) - 1:
+            print(f"🎯 Elbow detected at component {elbow_idx + 1} (explains {var_ratios[elbow_idx]:.4f} variance)")
+            variance_99_achieved = True
+
 # Train the remaining basis functions progressively
 for k in range(num_basis - 1):
 
@@ -148,6 +166,22 @@ for k in range(num_basis - 1):
     with torch.no_grad():
         explained_variance_ratio, *_ = compute_explained_variance(model)
         scores.append(explained_variance_ratio)
+
+        # Detect elbow in scree plot (find where explained variance drops significantly)
+        # Need at least 4-5 points for reliable elbow detection
+        if len(explained_variance_ratio) >= 4 and not variance_99_achieved:
+            var_ratios = explained_variance_ratio.cpu().numpy()
+            # Calculate second derivative to find the elbow
+            diffs = np.diff(var_ratios)
+            second_diffs = np.diff(diffs)
+
+            # Find elbow as the point where second derivative is maximum (most curvature)
+            elbow_idx = np.argmax(np.abs(second_diffs)) + 2  # +2 because of double diff
+
+            # Only report if the elbow is meaningful (not at the very end)
+            if elbow_idx < len(var_ratios) - 1:
+                print(f"🎯 Elbow detected at component {elbow_idx + 1} (explains {var_ratios[elbow_idx]:.4f} variance)")
+                variance_99_achieved = True
 
 
 # Plot results
