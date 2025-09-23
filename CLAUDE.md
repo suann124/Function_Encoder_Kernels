@@ -68,3 +68,12 @@ Experiments typically:
 - Model checkpoints are saved as `.pth` files
 - The system supports multiple coefficient computation methods - choose based on the specific requirements (sparsity, stability, etc.)
 - Neural ODE integrations use RK4 by default but integrators are configurable
+
+## Plotting format
+
+- Figsize: 5.5x3
+- Pointfont: 8
+- Timesnewroman
+- No plot titlea. instead, use annotation in the bottom left corner of subplots if needed
+- For multple of the SAME subplots in one plot (such as dynamics plot and basis functions visualization): only keep the leftmost and bottommost axes and label. Legend, if needed, put it outside of all subplot.
+- Save as: 300dpi, .PNG

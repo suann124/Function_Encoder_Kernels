@@ -162,9 +162,9 @@ class KeplerDataset(IterableDataset):
         integrator: Callable,
         n_points: int = 1000,
         n_example_points: int = 100,
-        M_central_range=(0.8, 1.2),  # Central mass range
+        M_central_range=(0.8, 1.1),  # Central mass range
         a_range=(1.0, 3.0),  # Semi-major axis range
-        e_range=(0.0, 0.7),  # Eccentricity range (avoid parabolic/hyperbolic)
+        e_range=(0.01, 0.7),  # Eccentricity range (avoid parabolic/hyperbolic)
         dt_range=(0.1, 0.1),
         device=None,
     ):

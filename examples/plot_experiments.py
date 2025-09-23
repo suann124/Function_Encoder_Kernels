@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Command line script to plot saved experiments.
-Usage: python plot_experiments.py [experiment_path] [--save-dir output_dir]
+Plot individual experiments (progressive or prune) for any problem type.
+Supports polynomial, kepler, and vdp experiments.
 """
 import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -11,10 +11,12 @@ from pathlib import Path
 from function_encoder.utils.experiment_plotter import ExperimentPlotter
 
 def main():
-    parser = argparse.ArgumentParser(description='Plot saved experiments')
+    parser = argparse.ArgumentParser(description='Plot individual experiment results')
     parser.add_argument('experiment_path', nargs='?', help='Path to experiment directory')
     parser.add_argument('--save-dir', default='plot_outputs', help='Directory to save plots')
     parser.add_argument('--list', action='store_true', help='List all available experiments')
+    parser.add_argument('--list-type', choices=['polynomial', 'kepler', 'vdp', 'progressive', 'prune'],
+                       help='Filter experiments by type or method')
 
     args = parser.parse_args()
 
@@ -23,6 +25,14 @@ def main():
     if args.list:
         # List all experiments
         experiments = plotter.list_all_experiments()
+
+        # Filter by type if specified
+        if args.list_type:
+            if args.list_type in ['progressive', 'prune']:
+                experiments = [exp for exp in experiments if args.list_type in exp]
+            else:  # problem type
+                experiments = [exp for exp in experiments if args.list_type in exp]
+
         print(f"Found {len(experiments)} experiments:")
         for i, exp in enumerate(experiments):
             print(f"{i+1:2d}. {exp}")
@@ -35,6 +45,7 @@ def main():
     if not args.experiment_path:
         print("Please provide an experiment path or use --list to see available experiments")
         print("Usage: python plot_experiments.py [experiment_path] [--save-dir output_dir]")
+        print("       python plot_experiments.py --list [--list-type polynomial|kepler|vdp|progressive|prune]")
         return
 
     exp_path = Path(args.experiment_path)
@@ -45,8 +56,8 @@ def main():
     save_dir = Path(args.save_dir)
     save_dir.mkdir(exist_ok=True)
 
-    print(f"Plotting experiment: {exp_path}")
-    print(f"Saving plots to: {save_dir}")
+    print(f"📊 Plotting experiment: {exp_path.name}")
+    print(f"💾 Saving plots to: {save_dir}")
 
     try:
         plotter.plot_experiment(exp_path, save_dir=save_dir)

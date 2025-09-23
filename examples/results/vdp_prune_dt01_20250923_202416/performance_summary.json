@@ -1,0 +1,12 @@
+{
+  "problem_type": "van_der_pol",
+  "method": "train_then_prune",
+  "num_basis_original": 10,
+  "num_basis_pruned": 2,
+  "compression_ratio": 0.2,
+  "performance_ratio": 6.662056079191916,
+  "keep_indices": [
+    4,
+    6
+  ]
+}

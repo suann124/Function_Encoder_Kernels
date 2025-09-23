@@ -46,7 +46,7 @@ class KeplerTrainPruneAnalyzer:
     def basis_function_factory(self):
         """Create NeuralODE basis function like in kepler_pca.py"""
         return NeuralODE(
-            ode_func=ODEFunc(model=MLP(layer_sizes=[5,64, 64, 4])),
+            ode_func=ODEFunc(model=MLP(layer_sizes=[5, 64, 64, 4])),
             integrator=rk4_step,
         )
 
@@ -165,8 +165,8 @@ class KeplerTrainPruneAnalyzer:
         n_basis = eigenvectors.shape[0]
         weighted_eig = np.zeros(n_basis)
         for i in range(n_components):
-            weighted_eig += np.abs(eigenvectors[:, i]) * eigenvalues[i]   
-            best_aligned_basis = np.argsort(weighted_eig)[::-1][:n_components]   
+            weighted_eig += np.abs(eigenvectors[:, i]) * eigenvalues[i]
+        best_aligned_basis = np.argsort(weighted_eig)[::-1][:n_components]   
             
         # # Create test input for functional evaluation - match the Kepler dataset format
         # # Use a batch of test trajectories
@@ -546,7 +546,7 @@ if __name__ == "__main__":
     eigenvalues, eigenvectors, explained_var = analyzer.analyze_basis_importance(full_model, dataset)
 
     # Step 3: Identify which basis to keep
-    keep_indices = analyzer.identify_redundant_basis(eigenvalues, eigenvectors, explained_var, full_model, variance_threshold=0.95)
+    keep_indices = analyzer.identify_redundant_basis(eigenvalues, eigenvectors, explained_var, full_model, variance_threshold=0.99)
     print(f"\nKeeping basis functions at indices: {keep_indices}")
 
     # Step 4: Create pruned model
@@ -576,75 +576,124 @@ if __name__ == "__main__":
     # Save experiment data
     saver = ExperimentSaver()
 
-    # Regenerate trajectory data for saving (following the visualization code)
-    test_sample = next(iter(DataLoader(dataset, batch_size=1)))
-    M_central, y0, dt, y1, example_y0, example_dt, example_y1 = test_sample
-
+    # Set models to evaluation mode
     full_model.eval()
     pruned_model.eval()
     pruned_model_refined.eval()
 
-    with torch.no_grad():
-        coeffs_orig, _ = full_model.compute_coefficients((example_y0, example_dt), example_y1)
-        coeffs_pruned, _ = pruned_model.compute_coefficients((example_y0, example_dt), example_y1)
-        coeffs_pruned_refined, _ = pruned_model_refined.compute_coefficients((example_y0, example_dt), example_y1)
+    # Generate 4 high-quality trajectories using EXACT same method as successful visualization (lines 387-478)
+    print("Generating 4 high-quality trajectory comparisons using successful visualization method...")
 
-    _M_central = M_central[0]
-    _y0 = generate_kepler_states_batch(
-        _M_central.item(),
-        dataset.a_range,
-        dataset.e_range,
-        1,
-        device=torch.device(device),
-    )
+    # Replace the existing 4-trajectory data with high-quality versions
+    hq_trajectories_true = []
+    hq_trajectories_pred_orig = []
+    hq_trajectories_pred_pruned = []
+    hq_trajectories_pred_refined = []
+    hq_initial_conditions = []
+    hq_system_params = []
 
-    _c_orig = coeffs_orig[0].unsqueeze(0)
-    _c_pruned = coeffs_pruned[0].unsqueeze(0)
-    _c_pruned_refined = coeffs_pruned_refined[0].unsqueeze(0)
-    s = 0.1
-    n = int(10.0 / s)
-    _dt = torch.tensor([s], device=device)
+    # Use EXACT same parameters as successful visualization
+    s = 0.1  # Time step for simulation (same as line 417)
+    n = int(10.0 / s)  # Simulate for 10 time units (same as line 418)
 
-    # True trajectory
-    x = _y0.clone()
-    y_true = [x]
-    for k in range(n):
-        x = rk4_step(kepler, x, _dt, M_central=_M_central) + x
-        y_true.append(x)
-    y_true_traj = torch.cat(y_true, dim=0).detach().cpu().numpy()
+    # Generate 4 different trajectories - using different sample points from dataset
+    for traj_idx in range(4):
+        print(f"  Generating trajectory {traj_idx + 1}/4...")
 
-    # Original model trajectory
-    x = _y0.clone().unsqueeze(1)
-    _dt = _dt.unsqueeze(0)
-    pred_orig = [x]
-    for k in range(n):
-        x = full_model((x, _dt), coefficients=_c_orig) + x
-        pred_orig.append(x)
-    pred_orig_traj = torch.cat(pred_orig, dim=1)[0].detach().cpu().numpy()
+        # Get different test samples from dataset for each trajectory (like line 389)
+        test_sample = next(iter(DataLoader(dataset, batch_size=1)))
+        M_central, y0, dt, y1, example_y0, example_dt, example_y1 = test_sample
 
-    # Pruned model trajectory
-    x = _y0.clone().unsqueeze(1)
-    pred_pruned = [x]
-    for k in range(n):
-        x = pruned_model((x, _dt), coefficients=_c_pruned) + x
-        pred_pruned.append(x)
-    pred_pruned_traj = torch.cat(pred_pruned, dim=1)[0].detach().cpu().numpy()
+        # Recompute predictions for the local test sample (exactly like lines 397-400)
+        with torch.no_grad():
+            coeffs_orig, _ = full_model.compute_coefficients((example_y0, example_dt), example_y1)
+            coeffs_pruned, _ = pruned_model.compute_coefficients((example_y0, example_dt), example_y1)
+            coeffs_pruned_refined, _ = pruned_model_refined.compute_coefficients((example_y0, example_dt), example_y1)
 
-    # Refined model trajectory
-    x = _y0.clone().unsqueeze(1)
-    pred_refined = [x]
-    for k in range(n):
-        x = pruned_model_refined((x, _dt), coefficients=_c_pruned_refined) + x
-        pred_refined.append(x)
-    pred_refined_traj = torch.cat(pred_refined, dim=1)[0].detach().cpu().numpy()
+        # Generate orbital trajectory like in kepler_pca.py (exactly like lines 405-419)
+        _M_central = M_central[0]
+        _y0 = generate_kepler_states_batch(
+            _M_central.item(),
+            dataset.a_range,
+            dataset.e_range,
+            1,
+            device=torch.device(device),
+        )
 
-    # Create visualization data
+        _c_orig = coeffs_orig[0].unsqueeze(0)
+        _c_pruned = coeffs_pruned[0].unsqueeze(0)
+        _c_pruned_refined = coeffs_pruned_refined[0].unsqueeze(0)
+        _dt = torch.tensor([s], device=device)
+
+        # Integrate the true trajectory (exactly like lines 422-428)
+        x = _y0.clone()
+        y_true = [x]
+        for k in range(n):
+            x = rk4_step(kepler, x, _dt, M_central=_M_central) + x
+            y_true.append(x)
+        y_true = torch.cat(y_true, dim=0)
+        y_true = y_true.detach().cpu().numpy()
+
+        # Integrate original model prediction (exactly like lines 431-439)
+        x = _y0.clone()
+        x = x.unsqueeze(1)
+        _dt = _dt.unsqueeze(0)
+        pred_orig = [x]
+        for k in range(n):
+            x = full_model((x, _dt), coefficients=_c_orig) + x
+            pred_orig.append(x)
+        pred_orig = torch.cat(pred_orig, dim=1)
+        pred_orig = pred_orig.detach().cpu().numpy()
+
+        # Integrate pruned model prediction (exactly like lines 442-449)
+        x = _y0.clone()
+        x = x.unsqueeze(1)
+        pred_pruned = [x]
+        for k in range(n):
+            x = pruned_model((x, _dt), coefficients=_c_pruned) + x
+            pred_pruned.append(x)
+        pred_pruned = torch.cat(pred_pruned, dim=1)
+        pred_pruned = pred_pruned.detach().cpu().numpy()
+
+        # Integrate pruned refined model prediction (exactly like lines 452-459)
+        x = _y0.clone()
+        x = x.unsqueeze(1)
+        pred_pruned_refined = [x]
+        for k in range(n):
+            x = pruned_model_refined((x, _dt), coefficients=_c_pruned_refined) + x
+            pred_pruned_refined.append(x)
+        pred_pruned_refined = torch.cat(pred_pruned_refined, dim=1)
+        pred_pruned_refined = pred_pruned_refined.detach().cpu().numpy()
+
+        # Store the high-quality trajectories (same format as successful visualization)
+        hq_trajectories_true.append(y_true)
+        hq_trajectories_pred_orig.append(pred_orig[0])  # Remove batch dimension
+        hq_trajectories_pred_pruned.append(pred_pruned[0])  # Remove batch dimension
+        hq_trajectories_pred_refined.append(pred_pruned_refined[0])  # Remove batch dimension
+        hq_initial_conditions.append(_y0[0].cpu().numpy())
+        hq_system_params.append(_M_central.item())
+
+    # Create visualization data using the same pattern as kepler_pca.py
+    # First, use the standard create_visualization_data_dynamics function
     viz_data = create_visualization_data_dynamics(
-        trajectories_true=[y_true_traj],
-        trajectories_pred=[pred_orig_traj, pred_pruned_traj, pred_refined_traj],
-        initial_conditions=[_y0[0].cpu().numpy()],
-        system_params=[_M_central.item()]
+        trajectories_true=hq_trajectories_true,
+        trajectories_pred=hq_trajectories_true,  # Use true as placeholder, will be overridden
+        initial_conditions=hq_initial_conditions,
+        system_params=hq_system_params
     )
+
+    # Then add the comprehensive trajectory prediction data for 1x4 plotting
+    # Create proper numpy arrays for trajectories_pred_all
+    trajectories_pred_all_np = np.array([
+        hq_trajectories_pred_orig,      # Original model predictions for all 4 trajectories
+        hq_trajectories_pred_pruned,    # Pruned model predictions for all 4 trajectories
+        hq_trajectories_pred_refined    # Refined model predictions for all 4 trajectories
+    ])
+
+    # Update with the proper trajectory data
+    viz_data.update({
+        "trajectories_pred_all": trajectories_pred_all_np,
+    })
 
     # We don't have separate train_losses for this script, so create empty list
     train_losses = []
@@ -670,13 +719,13 @@ if __name__ == "__main__":
         },
         training_params={
             "num_epochs_initial": 1000,
-            "num_epochs_finetune": 100,
+            "num_epochs_finetune": 1000,
             "learning_rate": 1e-3,
             "batch_size": 50
         }
     )
 
-    saver.save_experiment("kepler","prune", experiment_data, dataset_name="dt01")
+    saver.save_experiment("kepler","prune", experiment_data, dataset_name="99var_128")
 
     print(f"\nPruning completed!")
     print(f"Original model: {len(full_model.basis_functions.basis_functions)} basis functions")

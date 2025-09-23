@@ -1,0 +1,22 @@
+{
+  "problem_type": "kepler",
+  "method": "prune",
+  "dataset_name": "dt01",
+  "timestamp": "20250923_185039",
+  "num_basis": 10,
+  "dataset_params": {
+    "name": "kepler_dt01",
+    "n_points": 1000,
+    "n_example_points": 100,
+    "dt_range": [
+      0.1,
+      0.1
+    ]
+  },
+  "training_params": {
+    "num_epochs_initial": 1000,
+    "num_epochs_finetune": 1000,
+    "learning_rate": 0.001,
+    "batch_size": 50
+  }
+}

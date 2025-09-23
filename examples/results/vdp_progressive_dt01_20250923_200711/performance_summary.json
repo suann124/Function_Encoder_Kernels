@@ -1,0 +1,6 @@
+{
+  "problem_type": "van_der_pol",
+  "method": "progressive",
+  "num_basis_final": 5,
+  "final_loss": 0.0005811628652736545
+}

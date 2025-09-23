@@ -1,0 +1,19 @@
+{
+  "problem_type": "polynomial",
+  "method": "prune",
+  "dataset_name": "d4",
+  "timestamp": "20250923_204842",
+  "num_basis": 20,
+  "dataset_params": {
+    "name": "poly_degree4",
+    "n_points": 100,
+    "n_example_points": 100,
+    "degree": 4
+  },
+  "training_params": {
+    "num_epochs_initial": 2000,
+    "num_epochs_finetune": 500,
+    "learning_rate": 0.001,
+    "batch_size": 50
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "problem_type": "van_der_pol",
+  "method": "progressive",
+  "dataset_name": "vanderpol_dt01",
+  "timestamp": "20250923_200711",
+  "num_basis": 5,
+  "dataset_params": {
+    "name": "vanderpol_dt01",
+    "n_points": 1000,
+    "n_example_points": 100,
+    "dt_range": [
+      0.1,
+      0.1
+    ]
+  },
+  "training_params": {
+    "num_epochs": 1000,
+    "learning_rate": 0.001,
+    "batch_size": 50
+  }
+}

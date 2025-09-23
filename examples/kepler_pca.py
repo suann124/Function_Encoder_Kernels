@@ -117,7 +117,7 @@ with torch.no_grad():
 
     # Detect elbow in scree plot (find where explained variance drops significantly)
     # Need at least 4-5 points for reliable elbow detection
-    if len(explained_variance_ratio) >= 4 and not variance_99_achieved:
+    if len(explained_variance_ratio) >= 2 and not variance_99_achieved:
         var_ratios = explained_variance_ratio.cpu().numpy()
         # Calculate second derivative to find the elbow
         diffs = np.diff(var_ratios)

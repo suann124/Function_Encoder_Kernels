@@ -441,6 +441,7 @@ Performance ratio: {comparison_results['mse_pruned_refined']/comparison_results[
                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
         
         plt.tight_layout()
+        os.makedirs('plots', exist_ok=True)
         plt.savefig('plots/polynomial_prune_analysis.png', dpi=300, bbox_inches='tight')
         plt.show()
 
@@ -497,13 +498,24 @@ if __name__ == "__main__":
         coeffs_orig, _ = full_model.compute_coefficients(example_X.to(analyzer.device), example_y.to(analyzer.device))
         y_pred_orig = full_model(X.to(analyzer.device), coeffs_orig)[0,:,0][idx].cpu().numpy()
 
+    # Compute basis function outputs for visualization
+    X_plot = torch.linspace(-1, 1, 100).unsqueeze(0).unsqueeze(2).to(analyzer.device)
+
+    # Get basis outputs for the original model (all basis functions)
+    with torch.no_grad():
+        basis_outputs_all = []
+        for i in range(len(full_model.basis_functions.basis_functions)):
+            basis_output = full_model.basis_functions.basis_functions[i](X_plot)
+            basis_outputs_all.append(basis_output[0, :, 0].cpu().numpy())
+
     # Prepare visualization data
     viz_data = create_visualization_data_polynomial(
         X_sorted=X_sorted,
         y_sorted=y_sorted,
         y_pred=y_pred_orig,
         example_X=example_X[0].cpu().numpy(),
-        example_y=example_y[0].cpu().numpy()
+        example_y=example_y[0].cpu().numpy(),
+        basis_outputs=basis_outputs_all
     )
 
     # Prepare and save experiment data
@@ -533,7 +545,7 @@ if __name__ == "__main__":
         }
     )
 
-    saver.save_experiment("polynomial", "train_then_prune", experiment_data, dataset_name="poly_degree3")
+    saver.save_experiment("polynomial", "prune", experiment_data, dataset_name="d3")
     
     # Additional analysis: Show individual basis functions
     fig, axes = plt.subplots(2, max(num_basis//2, len(keep_indices)), figsize=(15, 6),
@@ -572,6 +584,7 @@ if __name__ == "__main__":
                loc='outside right upper', bbox_to_anchor=(1.02, 1))
 
     plt.tight_layout()
+    os.makedirs('plots', exist_ok=True)
     plt.savefig('plots/polynomial_basis_functions.png', dpi=300, bbox_inches='tight')
     plt.show()
 
