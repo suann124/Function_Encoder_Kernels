@@ -1,7 +1,6 @@
 import torch
 from torch.utils.data import DataLoader
 import numpy as np
-
 from my_datasets.kepler import KeplerDataset, kepler
 
 import sys, os
@@ -12,6 +11,7 @@ from function_encoder.model.neural_ode import NeuralODE, ODEFunc, rk4_step
 from function_encoder.function_encoder import BasisFunctions, FunctionEncoder
 from function_encoder.utils.training import train_step
 from function_encoder.utils.experiment_saver import ExperimentSaver, create_visualization_data_dynamics
+from function_encoder.utils.plotting import save_figure
 
 import tqdm
 
@@ -36,8 +36,6 @@ dataset = KeplerDataset(
 dataloader = DataLoader(dataset, batch_size=50)
 dataloader_iter = iter(dataloader)
 
-# LOSS_THRESHOLD = 1e-4
-
 # Create model
 def basis_function_factory():
     return NeuralODE(
@@ -54,7 +52,6 @@ basis_functions = BasisFunctions(basis_function_factory())
 model = FunctionEncoder(basis_functions).to(device)
 
 # Train model
-
 losses = []  # For plotting
 scores = []  # For plotting
 dataloader_coeffs = DataLoader(dataset, batch_size=50)
@@ -64,8 +61,6 @@ variance_99_achieved = False  # Track if 99% variance has been achieved
 
 def compute_explained_variance(model):
     _, _, _, _, example_y0, example_dt, example_y1 = next(dataloader_coeffs_iter)
-    # Data is already on the correct device from the dataset
-
     coefficients, G = model.compute_coefficients((example_y0, example_dt), example_y1)
 
     # Compute covariance matrix of coefficients (like in polynomial_pca)
@@ -90,8 +85,6 @@ def compute_explained_variance(model):
 
 def loss_function(model, batch):
     _, y0, dt, y1, y0_example, dt_example, y1_example = batch
-    # Data is already on the correct device from the dataset
-
     coefficients, _ = model.compute_coefficients((y0_example, dt_example), y1_example)
     pred = model((y0, dt), coefficients=coefficients)
 
@@ -111,25 +104,6 @@ with tqdm.tqdm(range(num_epochs), desc=f"basis 1/{num_basis}") as tqdm_bar:
         tqdm_bar.set_postfix({"loss": f"{loss:.2e}"})
 
 model.eval()
-with torch.no_grad():
-    explained_variance_ratio, *_ = compute_explained_variance(model)
-    scores.append(explained_variance_ratio)
-
-    # Detect elbow in scree plot (find where explained variance drops significantly)
-    # Need at least 4-5 points for reliable elbow detection
-    if len(explained_variance_ratio) >= 2 and not variance_99_achieved:
-        var_ratios = explained_variance_ratio.cpu().numpy()
-        # Calculate second derivative to find the elbow
-        diffs = np.diff(var_ratios)
-        second_diffs = np.diff(diffs)
-
-        # Find elbow as the point where second derivative is maximum (most curvature)
-        elbow_idx = np.argmax(np.abs(second_diffs)) + 2  # +2 because of double diff
-
-        # Only report if the elbow is meaningful (not at the very end)
-        if elbow_idx < len(var_ratios) - 1:
-            print(f"🎯 Elbow detected at component {elbow_idx + 1} (explains {var_ratios[elbow_idx]:.4f} variance)")
-            variance_99_achieved = True
 
 # Train the remaining basis functions progressively
 for k in range(num_basis - 1):
@@ -141,7 +115,7 @@ for k in range(num_basis - 1):
 
     # Freeze all existing basis function parameters except the new one
     for i, basis_func in enumerate(model.basis_functions.basis_functions):
-        if i < len(model.basis_functions.basis_functions) - 1:  # Freeze all except the last (newest)
+        if i < len(model.basis_functions.basis_functions) - 1:  
             for param in basis_func.parameters():
                 param.requires_grad = False
         else:  # Keep the newest basis function trainable
@@ -167,16 +141,12 @@ for k in range(num_basis - 1):
         explained_variance_ratio, *_ = compute_explained_variance(model)
         scores.append(explained_variance_ratio)
 
-        # Detect elbow in scree plot (find where explained variance drops significantly)
-        # Need at least 4-5 points for reliable elbow detection
         if len(explained_variance_ratio) >= 4 and not variance_99_achieved:
             var_ratios = explained_variance_ratio.cpu().numpy()
             # Calculate second derivative to find the elbow
             diffs = np.diff(var_ratios)
             second_diffs = np.diff(diffs)
-
-            # Find elbow as the point where second derivative is maximum (most curvature)
-            elbow_idx = np.argmax(np.abs(second_diffs)) + 2  # +2 because of double diff
+            elbow_idx = np.argmax(np.abs(second_diffs)) + 2
 
             # Only report if the elbow is meaningful (not at the very end)
             if elbow_idx < len(var_ratios) - 1:
@@ -195,7 +165,6 @@ with torch.no_grad():
     batch = next(iter(dataloader_eval))
 
     M_central, y0, dt, y1, y0_example, dt_example, y1_example = batch
-    # Data is already on the correct device from the dataset
 
     # Compute coefficients
     coefficients, G = model.compute_coefficients((y0_example, dt_example), y1_example)
@@ -253,6 +222,7 @@ with torch.no_grad():
 
     plt.tight_layout()
     plt.show()
+    save_figure(fig, "plots/kepler_pca_analysis.png", width=5.5, height=1.5, font_size=8)
 
     # Plot 2: Orbital Dynamics
     fig, axes = plt.subplots(2, 4, figsize=(16, 8))
@@ -422,9 +392,24 @@ experiment_data = saver.prepare_progressive_data(
 
 saver.save_experiment("kepler", "progressive", experiment_data, dataset_name="64")
 
+from pathlib import Path
+# find the newest progressive run dir and save the model there
+base = Path(saver.base_dir)                 
+pattern = "kepler_progressive_64_*"         
+run_dirs = sorted(
+    (d for d in base.glob(pattern) if d.is_dir()),
+    key=lambda p: p.stat().st_mtime
+)
+assert run_dirs, f"No run directories matched {pattern!r} in {base}"
+exp_dir = run_dirs[-1]                      
+
+# Save the model into that folder
+torch.save(model.state_dict(), exp_dir / "model_full.pth")
+print("Saved progressive model to:", exp_dir / "model_full.pth")
+
 print(
     f"Training completed with {len(model.basis_functions.basis_functions)} basis functions"
 )
 print(
     f"Final explained variance ratios: {scores[-1][:5].cpu().numpy()}"
-)  # Show first 5
+) 
